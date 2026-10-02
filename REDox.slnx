@@ -19,6 +19,7 @@
         <Project Path="tests/REDox.Tests/REDox.Tests.csproj" />
         <Project Path="tests/REDox.Toml.Tests/REDox.Toml.Tests.csproj" />
         <Project Path="tests/REDox.Xml.Tests/REDox.Xml.Tests.csproj" />
+        <Project Path="tests/REDox.Yaml.Tests/REDox.Yaml.Tests.csproj" />
     </Folder>
     <Folder Name="/experimental/">
         <Project Path="experimental/REDox.Images/REDox.Images.csproj" />

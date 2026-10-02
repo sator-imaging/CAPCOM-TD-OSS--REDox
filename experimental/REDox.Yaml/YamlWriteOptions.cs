@@ -41,4 +41,8 @@ public readonly record struct YamlWriteOptions
     internal Utf8TextWriteOptions TextWriteOptions => _textWriteOptions;
 
     public bool PreserveTrivia { get; init; }
+
+    public YamlStringMode StringMode { get; init; }
+
+    public YamlStringNewlineNormalization NormalizeStringNewlineAtEnd { get; init; }
 }

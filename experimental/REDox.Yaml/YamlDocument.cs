@@ -1,752 +1,337 @@
-﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
 using System.Buffers;
-using System.Buffers.Text;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using REDox.Json;
 using REDox.Serialization;
 
 namespace REDox.Yaml;
 
-public sealed class YamlDocument : Document
+public sealed partial class YamlDocument : Document
 {
-    private readonly HashSet<uint> _flowStyle = new();
+    private readonly Dictionary<uint, byte[]> _scalarValues = new();
+    private readonly List<uint> _trailingTrivia = new();
     private ReadOnlyMemory<byte> _source;
+    private string _text = string.Empty;
+    private int _position;
+    private YamlDocumentOptions _parseOptions;
 
     private YamlDocument(SerializerSettings settings) : base(settings)
     {
     }
 
-    public YamlDocument Duplicate()
+    public YamlDocument Duplicate() => CreateSnapshot<YamlDocument>();
+
+    public static YamlDocument Parse(Stream stream, SerializerSettings? settings = null,
+        YamlDocumentOptions options = default)
     {
-        return CreateSnapshot<YamlDocument>();
+        ArgumentNullException.ThrowIfNull(stream);
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return Parse(buffer.ToArray(), settings, options);
     }
 
-    public static YamlDocument Parse(Stream stream, SerializerSettings settings, YamlDocumentOptions options = default)
+    public static YamlDocument Parse(string yaml, SerializerSettings? settings = null,
+        YamlDocumentOptions options = default)
     {
-        var length = stream.Length;
-
-        var bytes = new byte[(int)length];
-
-        stream.ReadExactly(bytes.AsSpan());
-
-        return Parse(bytes, settings, options);
-    }
-
-    public static YamlDocument Parse(string yaml, SerializerSettings settings, YamlDocumentOptions options = default)
-    {
+        ArgumentNullException.ThrowIfNull(yaml);
         return Parse(Encoding.UTF8.GetBytes(yaml), settings, options);
     }
 
-    public static YamlDocument Parse(byte[] utf8Yaml, SerializerSettings settings,
+    public static YamlDocument Parse(byte[] utf8Yaml, SerializerSettings? settings = null,
         YamlDocumentOptions options = default)
     {
+        ArgumentNullException.ThrowIfNull(utf8Yaml);
         return Parse(utf8Yaml.AsMemory(), settings, options);
     }
 
-    public static YamlDocument Parse(ReadOnlyMemory<byte> utf8Yaml, SerializerSettings settings,
+    public static YamlDocument Parse(ReadOnlyMemory<byte> utf8Yaml, SerializerSettings? settings = null,
         YamlDocumentOptions options = default)
     {
-        var doc = new YamlDocument(settings);
-
-        doc.Read(utf8Yaml, options);
-
-        return doc;
+        var document = new YamlDocument(settings ?? SerializerSettings.Default);
+        try
+        {
+            document.Read(utf8Yaml, options);
+            return document;
+        }
+        catch
+        {
+            document.Dispose();
+            throw;
+        }
     }
 
+    public static bool TryParse(ReadOnlySpan<byte> utf8Yaml, out YamlDocument? document,
+        SerializerSettings? settings = null, YamlDocumentOptions options = default)
+    {
+        try
+        {
+            document = Parse(utf8Yaml.ToArray(), settings, options);
+            return true;
+        }
+        catch (DocumentParseException)
+        {
+            document = null;
+            return false;
+        }
+    }
 
     public static byte[] Encode(DElement element, YamlWriteOptions options = default)
     {
-        using (var cache = Helper.InstanceCache<Utf8TextWriter>.Get(() => new Utf8TextWriter()))
-        {
-            var writer = cache.Value;
-            var reader = new DataReader(element);
-
-            writer.Reset(reader.Settings, options.TextWriteOptions with { WriteIndented = true });
-            Write(writer, reader, reader.RootId, options);
-            return writer.Encode();
-        }
+        using var writer = new Utf8TextWriter(element.Document.Settings,
+            options.TextWriteOptions with { WriteIndented = true });
+        Write(writer, new DataReader(element), options);
+        return writer.Encode();
     }
 
     public static string EncodeToString(DElement element, YamlWriteOptions options = default)
     {
-        using (var cache = Helper.InstanceCache<Utf8TextWriter>.Get(() => new Utf8TextWriter()))
-        {
-            var writer = cache.Value;
-            var reader = new DataReader(element);
-
-            writer.Reset(reader.Settings, options.TextWriteOptions with { WriteIndented = true });
-            Write(writer, reader, reader.RootId, options);
-            return writer.EncodeToString();
-        }
+        using var writer = new Utf8TextWriter(element.Document.Settings,
+            options.TextWriteOptions with { WriteIndented = true });
+        Write(writer, new DataReader(element), options);
+        return writer.EncodeToString();
     }
 
     public static void EncodeTo(DElement element, Stream stream, YamlWriteOptions options = default)
     {
-        using (var cache = Helper.InstanceCache<Utf8TextWriter>.Get(() => new Utf8TextWriter()))
-        {
-            var writer = cache.Value;
-            var reader = new DataReader(element);
-
-            writer.Reset(stream, reader.Settings, options.TextWriteOptions with { WriteIndented = true });
-            Write(writer, reader, reader.RootId, options);
-            writer.Dispose();
-        }
+        using var writer = new Utf8TextWriter(stream, element.Document.Settings,
+            options.TextWriteOptions with { WriteIndented = true });
+        Write(writer, new DataReader(element), options);
     }
 
     public static void EncodeTo(DElement element, IBufferWriter<byte> bufferWriter,
         YamlWriteOptions options = default)
     {
-        using (var cache = Helper.InstanceCache<Utf8TextWriter>.Get(() => new Utf8TextWriter()))
-        {
-            var writer = cache.Value;
-            var reader = new DataReader(element);
-
-            writer.Reset(bufferWriter, reader.Settings, options.TextWriteOptions with { WriteIndented = true });
-            Write(writer, reader, reader.RootId, options);
-            writer.Dispose();
-        }
+        using var writer = new Utf8TextWriter(bufferWriter, element.Document.Settings,
+            options.TextWriteOptions with { WriteIndented = true });
+        Write(writer, new DataReader(element), options);
     }
 
-    private void Read(ReadOnlyMemory<byte> bytes, YamlDocumentOptions options)
+    private void Read(ReadOnlyMemory<byte> source, YamlDocumentOptions options)
     {
-        _source = bytes;
-
-        EnsureCapacity(_source.Length / 16);
-
-        var rootId = ParseYaml(_source.Span, options);
-
-        RootId = rootId;
-    }
-
-    private uint ParseScalar(ReadOnlySpan<byte> span, int offset)
-    {
-        //trim white space
-        span = span.TrimEnd(new[] { (byte)' ', (byte)'\n' });
-
-        if (Utf8Parser.TryParse(span, out float fvalue, out var bytesConsumed))
+        _parseOptions = options;
+        _source = DecodeSource(source, options.AutoDetectEncoding);
+        _text = new UTF8Encoding(false, true).GetString(_source.Span);
+        EnsureCapacity(_source.Length / 8);
+        _position = 0;
+        SkipTrivia();
+        if (AtDocumentMarker("---"))
         {
-            return AllocToken(DToken.Make(DTokenVariant.Float,
-                DToken.EncodeLengthOffsetPayload(bytesConsumed, offset)));
+            _position += 3;
+            SkipTrivia();
         }
 
-        return AllocToken(DToken.Make(DTokenVariant.String, DToken.EncodeLengthOffsetPayload(span.Length, offset)));
-    }
-
-    private uint ParseYaml(ReadOnlySpan<byte> yaml, YamlDocumentOptions options)
-    {
-        const int Capacity = 64;
-
-        using var stack =
-            new Helper.LocalStack<(uint pid, uint lid, int indent)>(
-                stackalloc (uint pid, uint lid, int indent)[Capacity], options.MaxDepth);
-
-        var index = 0;
-        var parentId = 0U;
-        var latestId = 0U;
-        var tokenId = 0U;
-        var indent = -1;
-        var scalarOffset = -1;
-        var lineOffset = 0;
-
-        for (;;)
+        if (_position >= _text.Length)
         {
-            var c = index < yaml.Length ? yaml[index] : 0;
+            RootId = ParseNull();
+            return;
+        }
 
-            switch ((char)c)
+        RootId = ParseNode(0);
+        SkipTrivia();
+        if (options.PreserveTrivia)
+        {
+            var trailingStart = (uint)GetTokens().Length;
+            while (trailingStart > RootId && GetToken(trailingStart - 1).Kind == DTokenKind.Trivia)
+                trailingStart--;
+            for (var triviaId = trailingStart; triviaId < GetTokens().Length; triviaId++)
             {
-                case '\n':
-                    index++;
-                    lineOffset = index;
-                    break;
-                case '\0':
-                case ',':
-                case '#':
-                    if (scalarOffset >= 0)
-                    {
-                        var offset = scalarOffset;
-                        var span = yaml.Slice(offset, index - offset);
-
-                        tokenId = ParseScalar(span, offset);
-
-                        if (!GetToken(parentId).IsContainer)
-                        {
-                            if (parentId == 0)
-                            {
-                                return tokenId;
-                            }
-
-                            throw new ParseException(this, ParseException.ErrorCode.InvalidFormat, index);
-                        }
-
-                        IncToken(parentId);
-
-                        if (latestId != 0)
-                        {
-                            LinkToken(latestId, tokenId);
-                        }
-
-                        latestId = tokenId;
-                        scalarOffset = -1;
-                    }
-
-                    index++;
-
-                    if (c == 0)
-                    {
-                        while (stack.Count > 0)
-                        {
-                            (parentId, latestId, indent) = stack.Pop();
-                        }
-
-                        return parentId;
-                    }
-
-                    if (c == '#')
-                    {
-                        var offset = index;
-                        while (index < yaml.Length)
-                        {
-                            c = yaml[index];
-                            if (c == '\n')
-                            {
-                                break;
-                            }
-
-                            index++;
-                        }
-                    }
-
-                    break;
-                case '-':
-                    if (yaml[index + 1] <= 0x20)
-                    {
-                        if (scalarOffset >= 0)
-                        {
-                            var offset = scalarOffset;
-                            var span = yaml.Slice(offset, index - offset);
-
-                            tokenId = ParseScalar(span, offset);
-
-                            if (!GetToken(parentId).IsContainer)
-                            {
-                                if (parentId == 0)
-                                {
-                                    return tokenId;
-                                }
-
-                                throw new ParseException(this, ParseException.ErrorCode.InvalidFormat, index);
-                            }
-
-                            IncToken(parentId);
-
-                            if (latestId != 0)
-                            {
-                                LinkToken(latestId, tokenId);
-                            }
-
-                            latestId = tokenId;
-                            scalarOffset = -1;
-                        }
-
-                        var curIndent = index - lineOffset + 1;
-
-                        if (indent < 0)
-                        {
-                            if (parentId == 0)
-                            {
-                                parentId = AllocToken(DToken.MakeArray(0));
-                                indent = curIndent;
-                            }
-                        }
-                        else
-                        {
-                            if (indent < curIndent)
-                            {
-                                tokenId = AllocToken(DToken.MakeArray(0));
-
-                                if (!GetToken(parentId).IsContainer)
-                                {
-                                    throw new ParseException(this, ParseException.ErrorCode.InvalidFormat, index);
-                                }
-
-                                IncToken(parentId);
-
-                                if (latestId != 0)
-                                {
-                                    LinkToken(latestId, tokenId);
-                                }
-
-                                latestId = tokenId;
-
-                                stack.Push((parentId, latestId, indent));
-
-                                parentId = tokenId;
-                                indent = curIndent;
-                            }
-
-                            while (indent > curIndent)
-                            {
-                                (parentId, latestId, indent) = stack.Pop();
-                            }
-                        }
-
-                        index++;
-                        scalarOffset = -1;
-                    }
-                    else
-                    {
-                        if (index + 2 < yaml.Length && yaml[index + 1] == '-' && yaml[index + 2] == '-')
-                        {
-                            //begin document
-                            index += 3;
-                        }
-                        else
-                        {
-                            goto default;
-                        }
-                    }
-
-                    break;
-                case ':':
-                    if (index + 1 >= yaml.Length || yaml[index + 1] <= 0x20)
-                    {
-                        var offset = scalarOffset;
-                        var curIndent = offset - lineOffset;
-
-                        var span = yaml.Slice(offset, index - offset);
-
-                        if (indent < 0)
-                        {
-                            if (parentId == 0)
-                            {
-                                parentId = AllocToken(DToken.MakeMap(0));
-                                indent = curIndent;
-                            }
-                        }
-                        else
-                        {
-                            if (indent < curIndent)
-                            {
-                                tokenId = AllocToken(DToken.MakeMap(0));
-
-                                if (!GetToken(parentId).IsContainer)
-                                {
-                                    throw new ParseException(this, ParseException.ErrorCode.InvalidFormat, index);
-                                }
-
-                                IncToken(parentId);
-
-                                if (latestId != 0)
-                                {
-                                    LinkToken(latestId, tokenId);
-                                }
-
-                                latestId = tokenId;
-
-                                stack.Push((parentId, latestId, indent));
-
-                                parentId = tokenId;
-                                indent = curIndent;
-                            }
-
-                            while (indent > curIndent)
-                            {
-                                (parentId, latestId, indent) = stack.Pop();
-                            }
-                        }
-
-
-                        tokenId = ParseScalar(span, offset);
-
-                        if (latestId != 0)
-                        {
-                            LinkToken(latestId, tokenId);
-                        }
-
-                        latestId = tokenId;
-
-                        index++;
-                        scalarOffset = -1;
-                    }
-                    else
-                    {
-                        goto default;
-                    }
-
-                    break;
-                case '[': //begin array
-                case '{': //begin map
-                    {
-                        if (scalarOffset >= 0)
-                        {
-                            goto default;
-                        }
-
-                        tokenId = AllocToken(c == '[' ? DToken.MakeArray(0) : DToken.MakeMap(0));
-                        _flowStyle.Add(tokenId);
-
-                        if (parentId == 0)
-                        {
-                            parentId = tokenId;
-                        }
-                        else
-                        {
-                            if (!GetToken(parentId).IsContainer)
-                            {
-                                throw new ParseException(this, ParseException.ErrorCode.InvalidFormat, index);
-                            }
-
-                            IncToken(parentId);
-
-                            if (latestId != 0)
-                            {
-                                LinkToken(latestId, tokenId);
-                            }
-
-                            latestId = tokenId;
-                        }
-
-                        stack.Push((parentId, latestId, indent));
-                        parentId = tokenId;
-                        latestId = 0;
-                        indent = -1;
-
-                        index++;
-                    }
-                    break;
-                case ']': //end array
-                case '}': //end map
-                    {
-                        if (indent >= 0 || !GetToken(parentId).IsContainer)
-                        {
-                            goto default;
-                        }
-
-                        if (scalarOffset >= 0)
-                        {
-                            var offset = scalarOffset;
-                            var span = yaml.Slice(offset, index - offset);
-
-                            tokenId = ParseScalar(span, offset);
-
-                            IncToken(parentId);
-
-                            if (latestId != 0)
-                            {
-                                LinkToken(latestId, tokenId);
-                            }
-
-                            latestId = tokenId;
-                            scalarOffset = -1;
-                        }
-
-                        tokenId = parentId;
-                        (parentId, latestId, indent) = stack.Pop();
-                        index++;
-                    }
-                    break;
-                default:
-                    if (c > 0x20)
-                    {
-                        if (scalarOffset < 0)
-                        {
-                            scalarOffset = index;
-                        }
-                        else
-                        {
-                            if (scalarOffset - lineOffset < 0)
-                            {
-                                var curIndent = index - lineOffset;
-
-                                if (indent >= curIndent)
-                                {
-                                    var offset = scalarOffset;
-                                    var span = yaml.Slice(offset, lineOffset - offset - 1);
-
-                                    tokenId = ParseScalar(span, offset);
-
-                                    if (!GetToken(parentId).IsContainer)
-                                    {
-                                        if (parentId == 0)
-                                        {
-                                            return tokenId;
-                                        }
-
-                                        throw new ParseException(this, ParseException.ErrorCode.InvalidFormat,
-                                            index);
-                                    }
-
-                                    IncToken(parentId);
-
-                                    if (latestId != 0)
-                                    {
-                                        LinkToken(latestId, tokenId);
-                                    }
-
-                                    latestId = tokenId;
-                                    scalarOffset = index;
-                                }
-
-                                while (indent > curIndent)
-                                {
-                                    (parentId, latestId, indent) = stack.Pop();
-                                }
-                            }
-                        }
-                    }
-
-                    index++;
-                    break;
+                if (GetToken(triviaId).Kind == DTokenKind.Trivia) _trailingTrivia.Add(triviaId);
             }
         }
+        if (_position < _text.Length)
+        {
+            throw Error(ParseErrorCode.InvalidFormat);
+        }
     }
 
-    private static void Write(Utf8TextWriter writer, in DataReader reader, uint id, YamlWriteOptions options)
+    private static ReadOnlyMemory<byte> DecodeSource(ReadOnlyMemory<byte> source, bool detectEncoding)
     {
-        WriteYaml(writer, reader, reader.Document as YamlDocument, id, ref options);
-        writer.WriteIndentNewLine();
+        var bytes = source.Span;
+        if (detectEncoding)
+        {
+            Encoding? encoding = null;
+            var skip = 0;
+            if (bytes.StartsWith(new byte[] { 0xef, 0xbb, 0xbf }))
+            {
+                encoding = new UTF8Encoding(false, true);
+                skip = 3;
+            }
+            else if (bytes.StartsWith(new byte[] { 0xff, 0xfe, 0, 0 }))
+            {
+                encoding = new UTF32Encoding(false, true, true);
+                skip = 4;
+            }
+            else if (bytes.StartsWith(new byte[] { 0, 0, 0xfe, 0xff }))
+            {
+                encoding = new UTF32Encoding(true, true, true);
+                skip = 4;
+            }
+            else if (bytes.StartsWith(new byte[] { 0xff, 0xfe }))
+            {
+                encoding = new UnicodeEncoding(false, true, true);
+                skip = 2;
+            }
+            else if (bytes.StartsWith(new byte[] { 0xfe, 0xff }))
+            {
+                encoding = new UnicodeEncoding(true, true, true);
+                skip = 2;
+            }
+            else if (bytes.Length >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0)
+            {
+                encoding = new UTF32Encoding(true, false, true);
+            }
+            else if (bytes.Length >= 4 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0)
+            {
+                encoding = new UTF32Encoding(false, false, true);
+            }
+            else if (bytes.Length >= 2 && bytes[0] == 0 && bytes[1] != 0)
+            {
+                encoding = new UnicodeEncoding(true, false, true);
+            }
+            else if (bytes.Length >= 2 && bytes[0] != 0 && bytes[1] == 0)
+            {
+                encoding = new UnicodeEncoding(false, false, true);
+            }
+
+            if (encoding != null)
+            {
+                return Encoding.UTF8.GetBytes(encoding.GetString(bytes[skip..]));
+            }
+        }
+
+        return source;
     }
 
-    private static void WriteYaml(Utf8TextWriter writer, in DataReader reader, YamlDocument? doc, uint tokenId,
-        ref YamlWriteOptions options)
+    private uint ParseNode(int depth, bool flow = false, int parentIndent = 0)
+    {
+        if (_parseOptions.MaxDepth > 0 && depth > _parseOptions.MaxDepth)
+        {
+            throw Error(ParseErrorCode.MaxDepthExceeded);
+        }
+
+        if (_position >= _text.Length)
+        {
+            return ParseNull();
+        }
+
+        if (_text[_position] is '&' or '*' or '!' or '%' or '?' ||
+            AtDocumentMarker("---") || AtDocumentMarker("..."))
+        {
+            throw Error(ParseErrorCode.UnsupportedFeature);
+        }
+
+        return _text[_position] switch
+        {
+            '[' => ParseFlowArray(depth),
+            '{' => ParseFlowMap(depth),
+            '-' when !flow && IsBlockSequenceIndicator() => ParseBlockArray(depth),
+            _ when !flow && IsBlockMapStart() => ParseBlockMap(depth),
+            _ => ParseScalarNode(parentIndent: parentIndent, flow: flow)
+        };
+    }
+
+    private uint ParseScalarNode(bool key = false, int parentIndent = 0, bool flow = false)
+    {
+        if (_position >= _text.Length || IsLineEnd(_text[_position]))
+        {
+            return ParseNull();
+        }
+
+        var value = _text[_position] switch
+        {
+            '"' => ParseDoubleQuotedString(),
+            '\'' => ParseSingleQuotedString(),
+            '|' or '>' when !key => ParseBlockString(parentIndent),
+            _ => ParsePlainString(key, flow, parentIndent)
+        };
+
+        if (value.Quoted || key)
+        {
+            return ParseString(value.Text);
+        }
+
+        if (TryParseNull(value.Text, out var nullId)) return nullId;
+        if (TryParseBoolean(value.Text, out var booleanId)) return booleanId;
+        if (TryParseNumber(value.Text, out var numberId)) return numberId;
+        return ParseString(value.Text);
+    }
+
+    private uint StoreScalar(DTokenVariant variant, string text)
+    {
+        var tokenId = AllocToken(DToken.Make(variant, 0));
+        SetToken(tokenId, DToken.Make(variant, DToken.EncodeLengthOffsetPayload(0, (int)tokenId)));
+        _scalarValues.Add(tokenId, Encoding.UTF8.GetBytes(text));
+        return tokenId;
+    }
+
+    private void CompleteContainer(uint containerId)
+    {
+        // Future edits rely on LinkId pointing after the last descendant, including an empty container.
+        var token = GetToken(containerId);
+        token.LinkId = (uint)GetTokens().Length;
+        SetToken(containerId, token);
+    }
+
+    private static bool IsLineEnd(char value) => value is '\r' or '\n';
+
+    private bool AtDocumentMarker(string marker)
+    {
+        return _text.AsSpan(_position).StartsWith(marker, StringComparison.Ordinal) &&
+               (_position + marker.Length == _text.Length || IsLineEnd(_text[_position + marker.Length]));
+    }
+
+    private static void Write(Utf8TextWriter writer, in DataReader reader, YamlWriteOptions options)
+    {
+        WriteTrivia(writer, reader, reader.RootId, options, false);
+        WriteNode(writer, reader, reader.RootId, options, 0, false);
+        writer.WriteNewLine();
+        if (options.PreserveTrivia && reader.Document is YamlDocument document)
+        {
+            WriteTrailingTrivia(writer, reader, document._trailingTrivia);
+        }
+    }
+
+    private static void WriteNode(Utf8TextWriter writer, in DataReader reader, uint tokenId,
+        YamlWriteOptions options, int depth, bool key)
     {
         var token = reader.GetToken(tokenId);
-
-        if (token.IsContainer)
+        if (token.Type == DTokenType.Array)
         {
-            if (token.Type == DTokenType.Array)
-            {
-                if (doc != null && doc._flowStyle.Contains(tokenId))
-                {
-                    var values = reader.EnumerateArray(tokenId);
-                    var separator = false;
-
-                    writer.WriteUtf8Byte((byte)'[');
-                    if (reader.GetValueCount(tokenId) > 0)
-                    {
-                        writer.PushIndent();
-                        writer.WriteIndentNewLine();
-                        foreach (var valueId in values)
-                        {
-                            if (separator)
-                            {
-                                writer.WriteUtf8Byte((byte)',');
-                                writer.WriteIndentNewLine();
-                            }
-
-                            WriteYaml(writer, reader, doc, valueId, ref options);
-                            separator = true;
-                        }
-
-                        writer.PopIndent();
-                        writer.WriteIndentNewLine();
-                    }
-
-                    writer.WriteUtf8Byte((byte)']');
-                }
-                else
-                {
-                    var count = reader.GetValueCount(tokenId);
-
-                    foreach (var valueId in reader.EnumerateArray(tokenId))
-                    {
-                        writer.WriteUtf8Byte((byte)'-');
-
-                        writer.PushIndent();
-                        if (reader.GetToken(valueId).Type == DTokenType.Map)
-                        {
-                            writer.WriteIndentNewLine();
-                        }
-                        else
-                        {
-                            writer.WriteUtf8Byte((byte)' ');
-                        }
-
-                        WriteYaml(writer, reader, doc, valueId, ref options);
-                        writer.PopIndent();
-
-                        if (--count > 0)
-                        {
-                            writer.WriteIndentNewLine();
-                        }
-                    }
-                }
-            }
-            else
-            {
-                if (doc != null && doc._flowStyle.Contains(tokenId))
-                {
-                    writer.WriteUtf8Byte((byte)'{');
-
-                    if (reader.GetValueCount(tokenId) > 0)
-                    {
-                        writer.PushIndent();
-                        writer.WriteIndentNewLine();
-
-                        var pairs = reader.EnumerateMap(tokenId);
-                        var separator = false;
-
-                        foreach (var pair in pairs)
-                        {
-                            if (separator)
-                            {
-                                writer.WriteUtf8Byte((byte)',');
-                                writer.WriteIndentNewLine();
-                            }
-
-                            WriteYaml(writer, reader, doc, pair.Key, ref options);
-                            writer.WriteUtf8Byte((byte)':');
-                            writer.WriteUtf8Byte((byte)' ');
-                            WriteYaml(writer, reader, doc, pair.Value, ref options);
-                            separator = true;
-                        }
-
-                        writer.PopIndent();
-                        writer.WriteIndentNewLine();
-                    }
-
-                    writer.WriteUtf8Byte((byte)'}');
-                }
-                else
-                {
-                    var count = reader.GetValueCount(tokenId);
-
-                    foreach (var kv in reader.EnumerateMap(tokenId))
-                    {
-                        WriteYaml(writer, reader, doc, kv.Key, ref options);
-
-                        if (reader.GetToken(kv.Value).IsContainer)
-                        {
-                            writer.WriteUtf8Byte((byte)':');
-                            writer.PushIndent();
-                            writer.WriteIndentNewLine();
-                            WriteYaml(writer, reader, doc, kv.Value, ref options);
-                            writer.PopIndent();
-                        }
-                        else
-                        {
-                            writer.WriteUtf8Byte((byte)':');
-                            writer.WriteUtf8Byte((byte)' ');
-                            WriteYaml(writer, reader, doc, kv.Value, ref options);
-                        }
-
-                        if (--count > 0)
-                        {
-                            writer.WriteIndentNewLine();
-                        }
-                    }
-                }
-            }
-        }
-        else
-        {
-            switch (token.Kind)
-            {
-                case DTokenKind.Float:
-                    writer.WriteDouble(reader.ReadDouble(tokenId));
-                    break;
-                case DTokenKind.Integer:
-                    if (token.Variant == DTokenVariant.IntegerUnsigned)
-                    {
-                        writer.WriteUInt64(reader.ReadUInt64(tokenId));
-                    }
-                    else
-                    {
-                        writer.WriteInt64(reader.ReadInt64(tokenId));
-                    }
-
-                    break;
-                case DTokenKind.String:
-                case DTokenKind.Symbol:
-                    writer.WriteString(reader.ReadUtf8String(tokenId));
-                    break;
-            }
-        }
-    }
-
-    protected override double DecodeFloat(DToken token)
-    {
-        var param = DToken.DecodeLengthOffsetPayload(token);
-        var src = _source.Span.Slice(param.offset, param.length);
-
-        if (Utf8Parser.TryParse(src, out double value, out var bytes))
-        {
-            return value;
+            WriteArray(writer, reader, tokenId, options, depth);
+            return;
         }
 
-        if (src.Length == 3 && src[0] == 'I' && src[1] == 'N' && src[2] == 'F')
+        if (token.Type == DTokenType.Map)
         {
-            return double.PositiveInfinity;
+            WriteMap(writer, reader, tokenId, options, depth);
+            return;
         }
 
-        if (src.Length == 4 && src[0] == '-' && src[1] == 'I' && src[2] == 'N' && src[3] == 'F')
+        switch (token.Kind)
         {
-            return double.NegativeInfinity;
-        }
-
-        if (Utf8Parser.TryParse(src, out bool bvalue, out var bbytes))
-        {
-            return bvalue ? 1 : 0;
-        }
-
-        throw new InvalidCastException();
-    }
-
-    protected override long DecodeInteger(DToken token)
-    {
-        var param = DToken.DecodeLengthOffsetPayload(token);
-        var span = _source.Span.Slice(param.offset, param.length);
-
-        if (token.Variant == DTokenVariant.IntegerUnsigned)
-        {
-            if (Utf8Parser.TryParse(span, out ulong uvalue, out var ubytes))
-            {
-                return (long)uvalue;
-            }
-        }
-        else
-        {
-            if (Utf8Parser.TryParse(span, out long value, out var bytes))
-            {
-                return value;
-            }
-        }
-
-        throw new InvalidCastException();
-    }
-
-    protected override ReadOnlySpan<byte> DecodeTrivia(DToken token)
-    {
-        var param = DToken.DecodeLengthOffsetPayload(token);
-        var src = _source.Span.Slice(param.offset, param.length);
-
-        return src;
-    }
-
-    protected override ReadOnlySpan<byte> DecodeUtf8Bytes(DToken token)
-    {
-        var param = DToken.DecodeLengthOffsetPayload(token);
-
-        return _source.Span.Slice(param.offset, param.length);
-    }
-
-    private class ParseException : DocumentParseException
-    {
-        public enum ErrorCode
-        {
-            None,
-            InvalidFormat
-        }
-
-        private ErrorCode _ErrorCode;
-
-        public ParseException(YamlDocument doc, ErrorCode error, int offset) : base(nameof(YamlDocument), offset)
-        {
-            _ErrorCode = error;
+            case DTokenKind.Null:
+                WriteNull(writer);
+                break;
+            case DTokenKind.Boolean:
+                WriteBoolean(writer, reader, tokenId);
+                break;
+            case DTokenKind.Integer:
+            case DTokenKind.Float:
+            case DTokenKind.InlineFloat:
+            case DTokenKind.BigNumber:
+                WriteNumber(writer, reader, tokenId);
+                break;
+            case DTokenKind.String:
+            case DTokenKind.Symbol:
+                WriteString(writer, reader, tokenId, options, depth, key);
+                break;
+            default:
+                throw new NotSupportedException($"YAML does not support {token.Kind} values.");
         }
     }
 }

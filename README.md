@@ -225,6 +225,7 @@ NuGet package IDs use the `CAPCOM.REDox.*` prefix. C# namespaces use `REDox.*`.
 | `CAPCOM.REDox.Html`                           | Preview | Practical HTML structural parser/writer                      |
 | `CAPCOM.REDox.Ini`                            | Public  | INI support                                                  |
 | `CAPCOM.REDox.Csv`                            | Preview | CSV support                                                  |
+| `REDox.Yaml`                                  | Experimental | YAML parser/writer for basic JSON-compatible values      |
 
 Preview packages use NuGet pre-release versions such as `0.1.0-preview.1`; the package name itself does not include `-preview`. Preview components may change API behavior before stable release.
 
@@ -495,7 +496,7 @@ The DOX format handled by `DoxDocument` is a binary layout that mirrors the in-m
 
 ### 1. Clone with submodules
 
-Test and benchmark data (`simdjson-data`, `JSONTestSuite`, `json5-tests`, `toml-test`) live under `external/` as git submodules.
+Test and benchmark data (`simdjson-data`, `JSONTestSuite`, `json5-tests`, `toml-test`, `yaml-test-suite`) live under `external/` as git submodules.
 
 ```powershell
 git clone --recurse-submodules https://github.com/CAPCOM-TD-OSS/REDox.git
@@ -541,6 +542,7 @@ The RE:Dox library packages do not bundle third-party code. The following third-
 | [nst/JSONTestSuite](https://github.com/nst/JSONTestSuite) | JSON conformance tests | MIT |
 | [json5/json5-tests](https://github.com/json5/json5-tests) | JSON5 conformance tests | MIT |
 | [toml-lang/toml-test](https://github.com/toml-lang/toml-test) | TOML conformance tests | MIT |
+| [yaml/yaml-test-suite](https://github.com/yaml/yaml-test-suite) | YAML conformance tests | MIT |
 
 ## License
 
