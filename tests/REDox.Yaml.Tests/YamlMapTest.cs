@@ -13,7 +13,9 @@ public sealed class YamlMapTest
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(0, document.RootElement.GetPropertyCount());
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 
     [Theory]
@@ -28,7 +30,9 @@ public sealed class YamlMapTest
         Assert.Equal(2, document.RootElement.GetPropertyCount());
         Assert.Equal(1, document.RootElement.GetProperty("a").GetInt64());
         Assert.True(document.RootElement.GetProperty("b").GetBoolean());
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 
     [Theory]
@@ -42,7 +46,9 @@ public sealed class YamlMapTest
         Assert.Equal(1, document.RootElement.GetPropertyCount());
         Assert.Equal(1, document.RootElement.GetProperty("a").GetPropertyCount());
         Assert.Equal(1, document.RootElement.GetProperty("a").GetProperty("b").GetInt64());
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 
     [Theory]
@@ -54,8 +60,12 @@ public sealed class YamlMapTest
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(1, document.RootElement.GetPropertyCount());
-        Assert.True(DValue.DeepEquals(new DArray(1, 2), document.RootElement.GetProperty("a").AsValue()));
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(new DArray(1, 2), document.RootElement.GetProperty("a").AsValue())
+        );
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 
     [Theory]
@@ -67,8 +77,12 @@ public sealed class YamlMapTest
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(2, document.RootElement.GetPropertyCount());
-        Assert.True(DValue.DeepEquals(new DArray(1, 2), document.RootElement.GetProperty("a").AsValue()));
+        Assert.True(
+            DValue.DeepEquals(new DArray(1, 2), document.RootElement.GetProperty("a").AsValue())
+        );
         Assert.Equal(3, document.RootElement.GetProperty("b").GetInt64());
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 }

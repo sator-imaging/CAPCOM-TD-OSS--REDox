@@ -19,46 +19,67 @@ public sealed partial class YamlDocument
             var current = _text[position];
             if (current == quote)
             {
-                if (quote == '\'' && position + 1 < _text.Length && _text[position + 1] == '\'') position++;
-                else quote = '\0';
+                if (quote == '\'' && position + 1 < _text.Length && _text[position + 1] == '\'')
+                    position++;
+                else
+                    quote = '\0';
             }
             else if (quote == '\0')
             {
-                if (current is '"' or '\'') quote = current;
-                else if (current == ':' && (position + 1 == _text.Length ||
-                                             char.IsWhiteSpace(_text[position + 1]))) return true;
-                else if (current == '#') break;
+                if (current is '"' or '\'')
+                    quote = current;
+                else if (
+                    current == ':'
+                    && (position + 1 == _text.Length || char.IsWhiteSpace(_text[position + 1]))
+                )
+                    return true;
+                else if (current == '#')
+                    break;
             }
-            else if (quote == '"' && current == '\\') position++;
+            else if (quote == '"' && current == '\\')
+                position++;
             position++;
         }
         return false;
     }
 
-    private uint ParseFlowMap(int depth)
+    private uint ParseFlowMap(int depth, int parentIndent)
     {
         var mapId = AllocToken(DToken.MakeMap(0));
-        HashSet<string>? keys = _parseOptions.EnableValueValidation ? new(StringComparer.Ordinal) : null;
+        HashSet<string>? keys = _parseOptions.EnableValueValidation
+            ? new(StringComparer.Ordinal)
+            : null;
         _position++;
         SkipTrivia();
+        CheckFlowIndent(parentIndent);
         while (_position < _text.Length && _text[_position] != '}')
         {
-            var keyId = ParseScalarNode(true, flow: true);
+            var keyId = ParseScalarNode(true, parentIndent, true);
             ValidateUniqueKey(keys, keyId);
             SkipInlineSpaces();
-            if (_position >= _text.Length || _text[_position++] != ':') throw Error(ParseErrorCode.InvalidFormat);
+            if (_position >= _text.Length || _text[_position++] != ':')
+                throw Error(ParseErrorCode.InvalidFormat);
             SkipTrivia();
-            if (_position < _text.Length && _text[_position] is ',' or '}') ParseNull();
-            else ParseNode(depth + 1, true);
+            CheckFlowIndent(parentIndent);
+            if (_position < _text.Length && _text[_position] is ',' or '}')
+                ParseNull();
+            else
+                ParseNode(depth + 1, true, parentIndent);
             IncToken(mapId);
             SkipTrivia();
-            if (_position >= _text.Length) throw Error(ParseErrorCode.InvalidFormat);
-            if (_text[_position] == '}') break;
-            if (_text[_position++] != ',') throw Error(ParseErrorCode.InvalidFormat);
+            CheckFlowIndent(parentIndent);
+            if (_position >= _text.Length)
+                throw Error(ParseErrorCode.InvalidFormat);
+            if (_text[_position] == '}')
+                break;
+            if (_text[_position++] != ',')
+                throw Error(ParseErrorCode.InvalidFormat);
             SkipTrivia();
+            CheckFlowIndent(parentIndent);
         }
 
-        if (_position >= _text.Length || _text[_position++] != '}') throw Error(ParseErrorCode.InvalidFormat);
+        if (_position >= _text.Length || _text[_position++] != '}')
+            throw Error(ParseErrorCode.InvalidFormat);
         CompleteContainer(mapId);
         return mapId;
     }
@@ -67,22 +88,27 @@ public sealed partial class YamlDocument
     {
         var baseIndent = _position - LastLineStart(_position);
         var mapId = AllocToken(DToken.MakeMap(0));
-        HashSet<string>? keys = _parseOptions.EnableValueValidation ? new(StringComparer.Ordinal) : null;
+        HashSet<string>? keys = _parseOptions.EnableValueValidation
+            ? new(StringComparer.Ordinal)
+            : null;
         while (_position < _text.Length && IsBlockMapStart())
         {
             var keyId = ParseScalarNode(true);
             ValidateUniqueKey(keys, keyId);
             SkipInlineSpaces();
-            if (_position >= _text.Length || _text[_position++] != ':') throw Error(ParseErrorCode.InvalidFormat);
+            if (_position >= _text.Length || _text[_position++] != ':')
+                throw Error(ParseErrorCode.InvalidFormat);
             SkipInlineSpaces();
             if (_position >= _text.Length || IsLineEnd(_text[_position]) || _text[_position] == '#')
             {
-                SkipToLineEnd();
-                ConsumeLineEnd();
+                SkipLineRemainder();
                 var following = PeekNextContent();
                 // A block sequence used as a mapping value may start at the key's indentation.
-                if (following.Indent > baseIndent ||
-                    following.Indent == baseIndent && IsBlockSequenceIndicator(following.Position))
+                if (
+                    following.Indent > baseIndent
+                    || following.Indent == baseIndent
+                        && IsBlockSequenceIndicator(following.Position)
+                )
                 {
                     SkipTrivia();
                     ParseNode(depth + 1, parentIndent: baseIndent);
@@ -94,15 +120,25 @@ public sealed partial class YamlDocument
             }
             else
             {
-                ParseNode(depth + 1, parentIndent: baseIndent);
+                var lineStart = LastLineStart(_position);
+                ParseNode(depth + 1, parentIndent: baseIndent, mapValueOnKeyLine: true);
+
+                if (LastLineStart(_position) == lineStart)
+                {
+                    ExpectLineEnd();
+                }
             }
 
             IncToken(mapId);
             SkipTrivia();
             var next = PeekNextContent();
-            if (next.Indent != baseIndent || next.Position >= _text.Length) break;
+            if (next.Indent != baseIndent || next.Position >= _text.Length)
+                break;
             _position = next.Position;
-            if (!IsBlockMapStart()) break;
+            if (IndentationContainsTab(_position))
+                throw Error(ParseErrorCode.InvalidFormat);
+            if (!IsBlockMapStart())
+                break;
         }
 
         CompleteContainer(mapId);
@@ -111,14 +147,19 @@ public sealed partial class YamlDocument
 
     private void ValidateUniqueKey(HashSet<string>? keys, uint keyId)
     {
-        if (keys != null && !keys.Add(Encoding.UTF8.GetString(_scalarValues[keyId])))
+        if (keys != null && !keys.Add(Encoding.UTF8.GetString(ScalarBytes(GetToken(keyId)))))
         {
             throw Error(ParseErrorCode.InvalidFormat);
         }
     }
 
-    private static void WriteMap(Utf8TextWriter writer, in DataReader reader, uint mapId,
-        YamlWriteOptions options, int depth)
+    private static void WriteMap(
+        Utf8TextWriter writer,
+        in DataReader reader,
+        uint mapId,
+        YamlWriteOptions options,
+        int depth
+    )
     {
         var count = reader.GetValueCount(mapId);
         if (count == 0)
@@ -130,26 +171,46 @@ public sealed partial class YamlDocument
         var separatorWritten = false;
         foreach (var pair in reader.EnumerateMap(mapId))
         {
-            WriteTrivia(writer, reader, pair.Key, options, separatorWritten);
+            if (separatorWritten)
+            {
+                // The line break after the previous entry is written here, not at the end of that entry, so that
+                // the comment which ended its line (stored as leading trivia of this key) can still be appended.
+                WriteInlineComment(writer, reader, pair.Key, options);
+                writer.WriteIndentNewLine();
+            }
+
+            WriteTrivia(
+                writer,
+                reader,
+                pair.Key,
+                options,
+                separatorWritten,
+                skipInlineComment: separatorWritten
+            );
             WriteNode(writer, reader, pair.Key, options, depth, true);
             writer.WriteUtf8Byte((byte)':');
             var value = reader.GetToken(pair.Value);
+            var block = value.IsContainer && reader.GetValueCount(pair.Value) > 0;
             writer.PushIndent();
-            if (value.IsContainer && reader.GetValueCount(pair.Value) > 0)
+            if (block)
             {
                 writer.WriteIndentNewLine();
+                // Comments between "key:" and a nested block are leading trivia of that block.
+                WriteTrivia(writer, reader, pair.Value, options, true);
             }
             else
             {
                 writer.WriteUtf8Byte((byte)' ');
             }
             WriteNode(writer, reader, pair.Value, options, depth + 1, false);
-            writer.PopIndent();
-            if (--count > 0)
+            // "key: # note" followed by a non-block value: only a block scalar would swallow the comment.
+            if (!block && value.Kind is not (DTokenKind.String or DTokenKind.Symbol))
             {
-                writer.WriteIndentNewLine();
-                separatorWritten = true;
+                WriteInlineComment(writer, reader, pair.Value, options);
             }
+
+            writer.PopIndent();
+            separatorWritten = true;
         }
     }
 }

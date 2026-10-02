@@ -12,7 +12,7 @@ public sealed partial class YamlDocument
         InvalidFormat,
         InvalidString,
         MaxDepthExceeded,
-        UnsupportedFeature
+        UnsupportedFeature,
     }
 
     private DocumentParseException Error(ParseErrorCode code)
@@ -24,8 +24,6 @@ public sealed partial class YamlDocument
     private sealed class ParseException : DocumentParseException
     {
         public ParseException(int position, ParseErrorCode code)
-            : base(nameof(YamlDocument), position, code.ToString())
-        {
-        }
+            : base(nameof(YamlDocument), position, code.ToString()) { }
     }
 }

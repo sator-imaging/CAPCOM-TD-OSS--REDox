@@ -14,7 +14,8 @@ public sealed class YamlJsonInputRobustnessTest
 
     [Theory]
     [MemberData(nameof(GetImplementationDefinedJsonFiles))]
-    public void ImplementationDefinedJsonInputsDoNotCrash(string filePath) => ExercisePublicConversion(filePath);
+    public void ImplementationDefinedJsonInputsDoNotCrash(string filePath) =>
+        ExercisePublicConversion(filePath);
 
     private static void ExercisePublicConversion(string filePath)
     {
@@ -35,13 +36,15 @@ public sealed class YamlJsonInputRobustnessTest
 
     public static IEnumerable<object[]> GetInvalidJsonFiles()
     {
-        return Directory.EnumerateFiles(FindParsingDirectory(), "n_*.json")
+        return Directory
+            .EnumerateFiles(FindParsingDirectory(), "n_*.json")
             .Select(path => new object[] { path });
     }
 
     public static IEnumerable<object[]> GetImplementationDefinedJsonFiles()
     {
-        return Directory.EnumerateFiles(FindParsingDirectory(), "i_*.json")
+        return Directory
+            .EnumerateFiles(FindParsingDirectory(), "i_*.json")
             .Select(path => new object[] { path });
     }
 
@@ -51,7 +54,8 @@ public sealed class YamlJsonInputRobustnessTest
         while (current != null)
         {
             var path = Path.Combine(current.FullName, "external", "JSONTestSuite", "test_parsing");
-            if (Directory.Exists(path)) return path;
+            if (Directory.Exists(path))
+                return path;
             current = current.Parent;
         }
 

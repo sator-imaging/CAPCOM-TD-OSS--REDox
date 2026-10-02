@@ -3,6 +3,6 @@
         <RootNamespace>REDox.Yaml</RootNamespace>
     </PropertyGroup>
     <ItemGroup>
-        <ProjectReference Include="..\..\src\REDox\REDox.csproj"/>
+        <ProjectReference Include="..\..\src\REDox\REDox.csproj" />
     </ItemGroup>
 </Project>

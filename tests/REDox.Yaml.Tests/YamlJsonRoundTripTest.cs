@@ -21,10 +21,10 @@ public sealed partial class YamlJsonRoundTripTest
             string yaml;
             try
             {
-                yaml = YamlDocument.EncodeToString(source.RootElement, new YamlWriteOptions
-                {
-                    StringMode = mode
-                });
+                yaml = YamlDocument.EncodeToString(
+                    source.RootElement,
+                    new YamlWriteOptions { StringMode = mode }
+                );
             }
             catch (NotSupportedException) when (mode == YamlStringMode.Multiline)
             {
@@ -36,8 +36,10 @@ public sealed partial class YamlJsonRoundTripTest
             // Exercise the public JSON writer and parser after YAML decoding to cover the full conversion path.
             var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);
             using var restored = JsonDocument.Parse(restoredJson);
-            Assert.True(DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
-                $"YAML round-trip changed {Path.GetFileName(filePath)} in {mode} mode.");
+            Assert.True(
+                DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
+                $"YAML round-trip changed {Path.GetFileName(filePath)} in {mode} mode."
+            );
         }
     }
 
@@ -51,29 +53,36 @@ public sealed partial class YamlJsonRoundTripTest
         using var source = JsonDocument.Parse(json);
         foreach (var mode in new[] { YamlStringMode.Quote, YamlStringMode.Multiline })
         {
-            var yaml = YamlDocument.EncodeToString(source.RootElement, new YamlWriteOptions
-            {
-                StringMode = mode
-            });
+            var yaml = YamlDocument.EncodeToString(
+                source.RootElement,
+                new YamlWriteOptions { StringMode = mode }
+            );
             using var parsed = YamlDocument.Parse(yaml);
             var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);
             using var restored = JsonDocument.Parse(restoredJson);
-            Assert.True(DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
-                $"YAML round-trip changed {json} in {mode} mode.");
+            Assert.True(
+                DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
+                $"YAML round-trip changed {json} in {mode} mode."
+            );
         }
     }
 
     public static IEnumerable<object[]> GetValidJsonFiles()
     {
         var suite = FindSuiteDirectory();
-        return Directory.EnumerateFiles(Path.Combine(suite, "test_parsing"), "y_*.json")
+        return Directory
+            .EnumerateFiles(Path.Combine(suite, "test_parsing"), "y_*.json")
             .Concat(Directory.EnumerateFiles(Path.Combine(suite, "test_transform"), "*.json"))
-            .Where(path => !DuplicateKeyCasesWithValidationDisabled.Contains(
-                               Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'),
-                               StringComparer.Ordinal) &&
-                           !UnsupportedIsolatedSurrogateCases.Contains(
-                               Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'),
-                               StringComparer.Ordinal))
+            .Where(path =>
+                !DuplicateKeyCasesWithValidationDisabled.Contains(
+                    Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'),
+                    StringComparer.Ordinal
+                )
+                && !UnsupportedIsolatedSurrogateCases.Contains(
+                    Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'),
+                    StringComparer.Ordinal
+                )
+            )
             .Select(path => new object[] { path });
     }
 
@@ -83,7 +92,8 @@ public sealed partial class YamlJsonRoundTripTest
         while (current != null)
         {
             var path = Path.Combine(current.FullName, "external", "JSONTestSuite");
-            if (Directory.Exists(Path.Combine(path, "test_parsing"))) return path;
+            if (Directory.Exists(Path.Combine(path, "test_parsing")))
+                return path;
             current = current.Parent;
         }
 

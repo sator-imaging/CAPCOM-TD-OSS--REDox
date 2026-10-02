@@ -37,7 +37,6 @@ public readonly record struct YamlWriteOptions
         init => _textWriteOptions = _textWriteOptions with { IndentSize = value };
     }
 
-
     internal Utf8TextWriteOptions TextWriteOptions => _textWriteOptions;
 
     public bool PreserveTrivia { get; init; }

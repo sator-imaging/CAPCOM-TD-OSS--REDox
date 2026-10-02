@@ -7,15 +7,19 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
+    internal static bool IsTrueText(string text) => text is "true" or "True" or "TRUE";
+
+    internal static bool IsFalseText(string text) => text is "false" or "False" or "FALSE";
+
     private bool TryParseBoolean(string text, out uint tokenId)
     {
-        if (text is "true" or "True" or "TRUE")
+        if (IsTrueText(text))
         {
             tokenId = AllocToken(DToken.Make(DTokenVariant.BooleanTrue, 0));
             return true;
         }
 
-        if (text is "false" or "False" or "FALSE")
+        if (IsFalseText(text))
         {
             tokenId = AllocToken(DToken.Make(DTokenVariant.BooleanFalse, 0));
             return true;
@@ -25,6 +29,9 @@ public sealed partial class YamlDocument
         return false;
     }
 
-    private static void WriteBoolean(Utf8TextWriter writer, in REDox.Serialization.DataReader reader,
-        uint tokenId) => writer.WriteBoolean(reader.ReadBoolean(tokenId));
+    private static void WriteBoolean(
+        Utf8TextWriter writer,
+        in REDox.Serialization.DataReader reader,
+        uint tokenId
+    ) => writer.WriteBoolean(reader.ReadBoolean(tokenId));
 }

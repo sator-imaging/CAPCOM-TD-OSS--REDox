@@ -6,5 +6,5 @@ namespace REDox.Yaml;
 public enum YamlStringMode
 {
     Quote,
-    Multiline
+    Multiline,
 }

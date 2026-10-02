@@ -13,7 +13,9 @@ public sealed class YamlArrayTest
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(0, document.RootElement.GetArrayLength());
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 
     [Theory]
@@ -24,8 +26,12 @@ public sealed class YamlArrayTest
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
-        Assert.True(DValue.DeepEquals(new DArray(1, true, DValue.Null), document.RootElement.AsValue()));
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(new DArray(1, true, DValue.Null), document.RootElement.AsValue())
+        );
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 
     [Theory]
@@ -37,7 +43,9 @@ public sealed class YamlArrayTest
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.True(DValue.DeepEquals(new DArray(1, 2), document.RootElement.AsValue()));
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 
     [Theory]
@@ -49,8 +57,14 @@ public sealed class YamlArrayTest
         using var parsed = YamlDocument.Parse(encoded);
 
         // Verify nested values independently of the YAML collection style used by the writer.
-        Assert.True(DValue.DeepEquals(new DArray(new DArray(1, 2), new DArray()),
-            document.RootElement.AsValue()));
-        Assert.True(DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue()));
+        Assert.True(
+            DValue.DeepEquals(
+                new DArray(new DArray(1, 2), new DArray()),
+                document.RootElement.AsValue()
+            )
+        );
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
+        );
     }
 }

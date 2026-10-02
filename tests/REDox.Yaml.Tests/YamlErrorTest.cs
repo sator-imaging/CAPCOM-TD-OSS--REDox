@@ -13,34 +13,52 @@ public sealed class YamlErrorTest
     [InlineData("? complex\n: key\n")]
     [InlineData("first\n---\nsecond\n")]
     [InlineData("a: [1, 2")]
+    [InlineData("a: b: c\n")]
+    [InlineData("a: - b\n")]
     public void UnsupportedOrMalformedSyntaxFails(string yaml)
     {
         Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse(yaml));
     }
 
     [Fact]
+    public void TryParseReturnsFalseForInvalidUtf8()
+    {
+        Assert.False(YamlDocument.TryParse([0x61, 0x3a, 0x20, 0xff], out var document));
+        Assert.Null(document);
+    }
+
+    [Fact]
     public void DepthLimitFails()
     {
-        Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse("[[1]]", options:
-            new YamlDocumentOptions { MaxDepth = 1 }));
+        Assert.ThrowsAny<DocumentParseException>(() =>
+            YamlDocument.Parse("[[1]]", options: new YamlDocumentOptions { MaxDepth = 1 })
+        );
     }
 
     [Fact]
     public void ValidationRejectsDuplicateKeys()
     {
-        Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse("a: 1\na: 2\n", options:
-            new YamlDocumentOptions { EnableValueValidation = true }));
+        Assert.ThrowsAny<DocumentParseException>(() =>
+            YamlDocument.Parse(
+                "a: 1\na: 2\n",
+                options: new YamlDocumentOptions { EnableValueValidation = true }
+            )
+        );
     }
 
     [Fact]
     public void MultilineRejectsUnrepresentableControlCharacter()
     {
         var value = DValue.Create("a\rb").AsElement();
-        Assert.ThrowsAny<NotSupportedException>(() => YamlDocument.EncodeToString(value,
-            new YamlWriteOptions { StringMode = YamlStringMode.Multiline }));
-        YamlDocument.EncodeToString(value, new YamlWriteOptions
-        {
-            StringMode = YamlStringMode.Quote
-        });
+        Assert.ThrowsAny<NotSupportedException>(() =>
+            YamlDocument.EncodeToString(
+                value,
+                new YamlWriteOptions { StringMode = YamlStringMode.Multiline }
+            )
+        );
+        YamlDocument.EncodeToString(
+            value,
+            new YamlWriteOptions { StringMode = YamlStringMode.Quote }
+        );
     }
 }

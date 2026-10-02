@@ -7,5 +7,5 @@ public enum YamlStringNewlineNormalization
 {
     Preserve,
     Remove,
-    EnsureOne
+    EnsureOne,
 }

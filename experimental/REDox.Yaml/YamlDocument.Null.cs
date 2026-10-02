@@ -9,9 +9,12 @@ public sealed partial class YamlDocument
 {
     private uint ParseNull() => AllocToken(DToken.Make(DTokenVariant.Null, 0));
 
+    internal static bool IsNullText(string text) =>
+        text.Length == 0 || text is "null" or "Null" or "NULL" or "~";
+
     private bool TryParseNull(string text, out uint tokenId)
     {
-        if (text.Length == 0 || text is "null" or "Null" or "NULL" or "~")
+        if (IsNullText(text))
         {
             tokenId = ParseNull();
             return true;
