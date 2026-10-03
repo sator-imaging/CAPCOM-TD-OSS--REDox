@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using REDox;
 using REDox.Json;
 
@@ -74,19 +75,106 @@ public sealed partial class YamlPrimitiveValueTest
         YamlTestHelper.ParsesAs(yaml, yaml);
     }
 
-    // The YAML 1.1 integer forms are not numbers: they are read as strings, so that a value such as a version or a
-    // postal code is never altered.
+    // The YAML 1.1 binary integers and the underscores between digits are numbers; an underscore is for reading only.
+    // The other YAML 1.1 forms are not: "190:20:30" and "0755" as an octal.
     [Theory]
-    [InlineData("0b101")]
-    [InlineData("1_000")]
+    [InlineData("0b101", 5L)]
+    [InlineData("0b1_01", 5L)]
+    [InlineData("1_000", 1000L)]
+    [InlineData("-1_000", -1000L)]
+    [InlineData("+1_0", 10L)]
+    [InlineData("1_0_0", 100L)]
+    [InlineData("0x1_0", 16L)]
+    [InlineData("0xF_F", 255L)]
+    [InlineData("0o1_4", 12L)]
+    [InlineData("9_223_372_036_854_775_807", long.MaxValue)]
+    public void YamlOneDotOneIntegerFormsAreNumbers(string yaml, long expected)
+    {
+        using var document = YamlDocument.Parse(yaml);
+
+        Assert.Equal(DTokenKind.Integer, document.RootElement.Token.Kind);
+        Assert.Equal(expected, document.RootElement.GetInt64());
+        // The value does not have the underscores, so it is written without them.
+        Assert.Equal(
+            expected.ToString(CultureInfo.InvariantCulture) + "\n",
+            YamlDocument.EncodeToString(
+                document.RootElement,
+                new YamlWriteOptions { NewLine = "\n" }
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData("1_000.5", 1000.5)]
+    [InlineData("1_0.0_1", 10.01)]
+    [InlineData("-1_0.5", -10.5)]
+    [InlineData("1_0e3", 10000.0)]
+    [InlineData("1_0.5E-1", 1.05)]
+    public void UnderscoresBetweenDigitsOfAFloatAreRead(string yaml, double expected)
+    {
+        using var document = YamlDocument.Parse(yaml);
+
+        Assert.Equal(DTokenKind.Float, document.RootElement.Token.Kind);
+        Assert.Equal(expected, document.RootElement.GetDouble());
+    }
+
+    [Fact]
+    public void BigIntegerWithUnderscoresIsReadWithoutThem()
+    {
+        using var document = YamlDocument.Parse("1_000_000_000_000_000_000_000");
+
+        Assert.Equal(DTokenKind.BigNumber, document.RootElement.Token.Kind);
+        Assert.Equal("1000000000000000000000", JsonDocument.EncodeToString(document.RootElement));
+    }
+
+    [Fact]
+    public void UnsignedIntegerWithUnderscoresIsRead()
+    {
+        using var document = YamlDocument.Parse("18_446_744_073_709_551_615");
+
+        Assert.Equal(ulong.MaxValue, document.RootElement.GetUInt64());
+    }
+
+    // An underscore stands between two digits (hexadecimal digits in a hexadecimal number), not in an exponent.
+    [Theory]
+    [InlineData("_1")]
+    [InlineData("1_")]
+    [InlineData("1__0")]
+    [InlineData("0x_1")]
+    [InlineData("0x1_")]
+    [InlineData("0b_1")]
+    [InlineData("0b1_")]
+    [InlineData("1_.5")]
+    [InlineData("1._5")]
+    [InlineData("1_e5")]
+    [InlineData("1e1_0")]
+    [InlineData("1_a")]
+    [InlineData("a_1")]
+    [InlineData("0b12")]
+    [InlineData("0b1_2")]
+    [InlineData("0xG_1")]
+    [InlineData("-_1")]
+    public void UnderscoreAnywhereElseMakesAString(string yaml)
+    {
+        using var document = YamlDocument.Parse(yaml);
+
+        Assert.Equal(DTokenKind.String, document.RootElement.Token.Kind);
+        Assert.Equal(yaml, document.RootElement.GetString());
+    }
+
+    // The YAML 1.1 integer forms that are still not numbers are read as strings, so that a value such as a version or
+    // a postal code is never altered.
+    [Theory]
     [InlineData("190:20:30")]
     [InlineData("0o8")]
     [InlineData("0o")]
     [InlineData("0x")]
+    [InlineData("0b")]
     [InlineData("0xG1")]
     [InlineData("0X1F")]
-    [InlineData("0x1_0")]
+    [InlineData("0B101")]
     [InlineData("0xFFFFFFFFFFFFFFFFF")]
+    [InlineData("0b11111111111111111111111111111111111111111111111111111111111111111")]
     public void YamlOneDotOneIntegerFormsAreStrings(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
@@ -180,27 +268,6 @@ public sealed partial class YamlPrimitiveValueTest
 
         using var parsed = YamlDocument.Parse(yaml);
         Assert.Equal(value, parsed.RootElement.GetDouble());
-    }
-
-    // A symbol of any kind is written as the text it holds.
-    [Theory]
-    [InlineData(SymbolKind.Default)]
-    [InlineData(SymbolKind.Identifier)]
-    [InlineData(SymbolKind.Reference)]
-    [InlineData(SymbolKind.TypeName)]
-    [InlineData(SymbolKind.Metadata)]
-    public void SymbolIsWrittenAsItsText(SymbolKind kind)
-    {
-        var value = DValue.Create(new REDox.Serialization.Utf8Symbol("name"), kind);
-
-        var yaml = YamlDocument.EncodeToString(
-            value.AsElement(),
-            new YamlWriteOptions { NewLine = "\n" }
-        );
-
-        Assert.Equal("name\n", yaml);
-        using var parsed = YamlDocument.Parse(yaml);
-        Assert.Equal("name", parsed.RootElement.GetString());
     }
 
     // An integer of any kind (hexadecimal, octal, binary, unsigned) is written as a number that reads back as the

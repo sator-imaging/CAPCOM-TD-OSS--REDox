@@ -218,6 +218,7 @@ public sealed partial class YamlDocument
         return (position, -1);
     }
 
+    /// <inheritdoc />
     protected override ReadOnlySpan<byte> DecodeTrivia(DToken token)
     {
         return ScalarBytes(token);

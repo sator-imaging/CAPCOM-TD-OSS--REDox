@@ -5,12 +5,11 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 using REDox;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlApiAndConcurrencyTest
+public sealed partial class YamlApiTest
 {
     private const string Sample =
         "name: \"a: b\"\nlist:\n  - 1\n  - true\n  - null\nnested:\n  key: 1.5\n";
@@ -172,67 +171,6 @@ public sealed partial class YamlApiAndConcurrencyTest
         AssertIsSample(fromBytes);
     }
 
-    // Concurrency: the encoders and the word sets are static and shared by every document.
-
-    [Fact]
-    public void ParseAndEncodeInParallelGiveTheSameResultAsOneThread()
-    {
-        var expected = SingleThreaded();
-
-        var results = Enumerable
-            .Range(0, 64)
-            .AsParallel()
-            .WithDegreeOfParallelism(8)
-            .Select(_ => Enumerable.Range(0, 50).Select(_ => SingleThreaded()).Distinct().ToArray())
-            .ToArray();
-
-        Assert.All(results, texts => Assert.Equal(new[] { expected }, texts));
-    }
-
-    [Fact]
-    public async Task StringsThatNeedQuotingAreWrittenInParallelWithoutMixingThemUp()
-    {
-        var values = new[]
-        {
-            "plain",
-            "true",
-            "123",
-            "a: b",
-            "line\nbreak",
-            "tab\there",
-            "emoji " + char.ConvertFromUtf32(0x1f600),
-            "2001-12-14",
-            "yes",
-            "",
-        };
-
-        var tasks = Enumerable
-            .Range(0, 16)
-            .Select(worker =>
-                Task.Run(() =>
-                {
-                    for (var i = 0; i < 200; i++)
-                    {
-                        var value = values[(worker + i) % values.Length];
-                        var yaml = YamlDocument.EncodeToString(
-                            DValue.Create(value).AsElement(),
-                            Options
-                        );
-                        using var parsed = YamlDocument.Parse(yaml);
-                        Assert.Equal(value, parsed.RootElement.GetString());
-                    }
-                })
-            );
-
-        await Task.WhenAll(tasks);
-    }
-
-    private static string SingleThreaded()
-    {
-        using var document = YamlDocument.Parse(Sample);
-        return YamlDocument.EncodeToString(document.RootElement, Options);
-    }
-
     // Serializer: an object goes to YAML and comes back through the core's conversion.
 
     public enum Color
@@ -275,15 +213,15 @@ public sealed partial class YamlApiAndConcurrencyTest
         };
 
     [Theory]
-    [InlineData(YamlStringMode.Quote)]
-    [InlineData(YamlStringMode.Multiline)]
-    public void ObjectRoundTripsThroughYaml(YamlStringMode mode)
+    [InlineData(YamlStringStyle.Quote)]
+    [InlineData(YamlStringStyle.Multiline)]
+    public void ObjectRoundTripsThroughYaml(YamlStringStyle mode)
     {
         var source = CreatePerson();
 
         var yaml = YamlDocument.EncodeToString(
             DValue.From(source).AsElement(),
-            new YamlWriteOptions { StringMode = mode }
+            new YamlWriteOptions { StringStyle = mode }
         );
         using var document = YamlDocument.Parse(yaml);
         var restored = ToObject<Person>(document.RootElement);

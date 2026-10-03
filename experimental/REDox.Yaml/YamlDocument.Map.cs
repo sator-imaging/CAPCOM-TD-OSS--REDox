@@ -437,9 +437,9 @@ public sealed partial class YamlDocument
     {
         var token = GetToken(keyId);
 
-        // A key with no text is a null key; with ReadKeysAsStrings there is no string to read ("null" as a key is
+        // A key with no text is a null key; with ReadMapKeyAsString there is no string to read ("null" as a key is
         // text, and is read as the string "null").
-        if (_parseOptions.ReadKeysAsStrings && token.Kind == DTokenKind.Null)
+        if (_parseOptions.ReadMapKeyAsString && token.Kind == DTokenKind.Null)
         {
             throw Error(ParseException.ErrorCode.InvalidFormat);
         }

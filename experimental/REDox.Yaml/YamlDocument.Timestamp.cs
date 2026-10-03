@@ -9,8 +9,7 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
-    private TimeZoneInfo UnspecifiedOffsetTimeZone =>
-        _parseOptions.TimeZoneForUnspecifiedOffset ?? TimeZoneInfo.Utc;
+    private TimeZoneInfo AssumedTimeZone => _parseOptions.AssumedTimeZone ?? TimeZoneInfo.Utc;
 
     // A timestamp starts with a year of four digits and a dash ("2001-12-14"). Only a text that does is turned into a
     // string for the pattern that decides the rest, so no other plain scalar costs a string.
@@ -49,10 +48,7 @@ public sealed partial class YamlDocument
         // can only apply UTC (a Utc DateTime) or the local zone of the machine. A zone given in the options would be
         // ignored, so such a timestamp is stored as an offset timestamp and read through DecodeDateTimeOffset, which
         // applies the zone. The text, and so what is written, is the same either way.
-        if (
-            variant != DTokenVariant.TimestampOffsetDateTime
-            && UnspecifiedOffsetTimeZone != TimeZoneInfo.Utc
-        )
+        if (variant != DTokenVariant.TimestampOffsetDateTime && AssumedTimeZone != TimeZoneInfo.Utc)
         {
             variant = DTokenVariant.TimestampOffsetDateTime;
         }
@@ -61,19 +57,21 @@ public sealed partial class YamlDocument
         return true;
     }
 
+    /// <inheritdoc />
     protected override DateTime DecodeDateTime(DToken token)
     {
         return YamlTimestampHelper.ToDateTime(
             Encoding.UTF8.GetString(ScalarBytes(token)),
-            UnspecifiedOffsetTimeZone
+            AssumedTimeZone
         );
     }
 
+    /// <inheritdoc />
     protected override DateTimeOffset DecodeDateTimeOffset(DToken token)
     {
         return YamlTimestampHelper.ToDateTimeOffset(
             Encoding.UTF8.GetString(ScalarBytes(token)),
-            UnspecifiedOffsetTimeZone
+            AssumedTimeZone
         );
     }
 

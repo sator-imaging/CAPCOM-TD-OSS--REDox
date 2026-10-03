@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Linq;
 using System.Text;
 using REDox;
@@ -95,7 +96,7 @@ public sealed partial class YamlOptionsTest
 
         Assert.True(stream.ToArray().AsSpan().StartsWith(Encoding.UTF8.Preamble));
 
-        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        var buffer = new ArrayBufferWriter<byte>();
         YamlDocument.EncodeTo(document.RootElement, buffer, options);
         Assert.True(buffer.WrittenSpan.StartsWith(Encoding.UTF8.Preamble));
     }
@@ -200,7 +201,7 @@ public sealed partial class YamlOptionsTest
         Assert.True(document.RootElement.IsValid);
     }
 
-    // The explicit indentation indicator of a block scalar at the root counts from RootIndent: 0 by default (libyaml),
+    // The explicit indentation indicator of a block scalar at the root counts from RootIndentationLevel: 0 by default (libyaml),
     // -1 as in the YAML 1.2 specification.
     [Theory]
     [InlineData(0, "|2-\n    indented\n", "  indented")]
@@ -209,47 +210,47 @@ public sealed partial class YamlOptionsTest
     // A line with leading spaces is more indented, so a folded scalar keeps its line breaks.
     [InlineData(0, ">1-\n  a\n  b\n", " a\n b")]
     [InlineData(-1, ">1-\n  a\n  b\n", "  a\n  b")]
-    public void RootIndentSetsWhereTheIndicatorOfARootBlockScalarCounts(
-        int rootIndent,
+    public void RootIndentationLevelSetsWhereTheIndicatorOfARootBlockScalarCounts(
+        int rootIndentationLevel,
         string yaml,
         string expected
     )
     {
         using var document = YamlDocument.Parse(
             yaml,
-            options: new YamlDocumentOptions { RootIndent = rootIndent }
+            options: new YamlDocumentOptions { RootIndentationLevel = rootIndentationLevel }
         );
 
         Assert.Equal(expected, document.RootElement.GetString());
     }
 
     [Fact]
-    public void RootIndentDefaultsToZero()
+    public void RootIndentationLevelDefaultsToZero()
     {
-        Assert.Equal(0, new YamlDocumentOptions().RootIndent);
-        Assert.Equal(0, default(YamlDocumentOptions).RootIndent);
+        Assert.Equal(0, new YamlDocumentOptions().RootIndentationLevel);
+        Assert.Equal(0, default(YamlDocumentOptions).RootIndentationLevel);
     }
 
-    // A block scalar below a key is not at the root, so RootIndent has no effect on it.
+    // A block scalar below a key is not at the root, so RootIndentationLevel has no effect on it.
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
     [InlineData(3)]
-    public void RootIndentDoesNotChangeANestedBlockScalar(int rootIndent)
+    public void RootIndentationLevelDoesNotChangeANestedBlockScalar(int rootIndentationLevel)
     {
         using var document = YamlDocument.Parse(
             "a: |2-\n    indented\n",
-            options: new YamlDocumentOptions { RootIndent = rootIndent }
+            options: new YamlDocumentOptions { RootIndentationLevel = rootIndentationLevel }
         );
 
         Assert.Equal("  indented", document.RootElement.GetProperty("a").GetString());
     }
 
     [Fact]
-    public void RootIndentLessThanMinusOneIsRefused()
+    public void RootIndentationLevelLessThanMinusOneIsRefused()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new YamlDocumentOptions { RootIndent = -2 }
+            new YamlDocumentOptions { RootIndentationLevel = -2 }
         );
     }
 

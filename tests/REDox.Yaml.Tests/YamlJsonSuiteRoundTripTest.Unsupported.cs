@@ -22,11 +22,11 @@ public sealed partial class YamlJsonSuiteRoundTripTest
     {
         using var source = JsonDocument.Parse(File.ReadAllBytes(filePath));
 
-        foreach (var mode in new[] { YamlStringMode.Quote, YamlStringMode.Multiline })
+        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
             var yaml = YamlDocument.EncodeToString(
                 source.RootElement,
-                new YamlWriteOptions { StringMode = mode }
+                new YamlWriteOptions { StringStyle = mode }
             );
             using var parsed = YamlDocument.Parse(yaml);
             var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
+using System;
+
 namespace REDox.Yaml;
 
 /// <summary>
@@ -31,7 +33,7 @@ public readonly record struct YamlWriteOptions
 
     /// <summary>
     /// The number of spaces that each nested level is indented by, from 0 to 127. The default is 2. A value outside
-    /// the range throws an <see cref="System.ArgumentOutOfRangeException" /> when it is set.
+    /// the range throws an <see cref="ArgumentOutOfRangeException" /> when it is set.
     /// </summary>
     public int IndentSize
     {
@@ -48,7 +50,7 @@ public readonly record struct YamlWriteOptions
     public bool PreserveTrivia { get; init; }
 
     /// <summary>
-    /// How a string value is written. See <see cref="YamlStringMode" />.
+    /// How a string value is written. See <see cref="YamlStringStyle" />.
     /// </summary>
-    public YamlStringMode StringMode { get; init; }
+    public YamlStringStyle StringStyle { get; init; }
 }

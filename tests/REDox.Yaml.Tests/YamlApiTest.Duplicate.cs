@@ -4,7 +4,7 @@ using REDox;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlApiAndConcurrencyTest
+public sealed partial class YamlApiTest
 {
     // Every kind of value, a nested map and list, and comments, so that nothing the duplicate holds is left out.
     private const string DuplicateSource =

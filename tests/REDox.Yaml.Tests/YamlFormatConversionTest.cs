@@ -240,6 +240,35 @@ public sealed partial class YamlFormatConversionTest
         );
     }
 
+    // MessagePack keeps the offset of a DateTimeOffset in a list next to the timestamp. YAML does not combine them: the
+    // list is written as it is, with the timestamp as a timestamp without an offset, so the offset is the number of
+    // minutes that follows, and the timestamp reads in the assumed time zone like any timestamp without an offset.
+    [Fact]
+    public void MessagePackOffsetIsAListAndTheTimestampReadsInTheAssumedTimeZone()
+    {
+        var value = new DateTimeOffset(2001, 12, 14, 21, 59, 43, TimeSpan.FromHours(9));
+        var tokyo = TimeZoneInfo.CreateCustomTimeZone(
+            "Tokyo",
+            TimeSpan.FromHours(9),
+            "Tokyo",
+            "Tokyo"
+        );
+
+        var yaml = YamlThrough("messagepack", DValue.Create(value).AsElement());
+
+        Assert.Equal("- 2001-12-14T21:59:43\n- 540\n", yaml);
+        using var utc = YamlDocument.Parse(yaml);
+        using var assumed = YamlDocument.Parse(
+            yaml,
+            options: new YamlDocumentOptions { AssumedTimeZone = tokyo }
+        );
+        var inUtc = utc.RootElement.AsArray()[0].AsElement().GetDateTimeOffset();
+        var inTokyo = assumed.RootElement.AsArray()[0].AsElement().GetDateTimeOffset();
+        Assert.Equal(TimeSpan.Zero, inUtc.Offset);
+        Assert.Equal(TimeSpan.FromHours(9), inTokyo.Offset);
+        Assert.Equal(540, utc.RootElement.AsArray()[1].AsElement().GetInt64());
+    }
+
     // CBOR's "undefined" (0xf7) has no YAML form of its own: it is a null.
     [Fact]
     public void CborUndefinedBecomesNull()

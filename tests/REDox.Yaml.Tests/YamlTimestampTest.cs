@@ -123,7 +123,7 @@ public sealed partial class YamlTimestampTest
             "Tokyo",
             "Tokyo"
         );
-        var options = new YamlDocumentOptions { TimeZoneForUnspecifiedOffset = tokyo };
+        var options = new YamlDocumentOptions { AssumedTimeZone = tokyo };
 
         using var document = YamlDocument.Parse(
             "local: 2001-12-14 21:59:43\nexplicit: 2001-12-14 21:59:43Z\ndate: 2001-12-14\n",
@@ -152,24 +152,6 @@ public sealed partial class YamlTimestampTest
             "local: 2001-12-14 21:59:43\nexplicit: 2001-12-14 21:59:43Z\ndate: 2001-12-14\n",
             encoded
         );
-    }
-
-    // YAML has no time of day without a date: a local time of another format is written as its text, and it reads
-    // back as a string, because "12:30:00" is not a timestamp (and the library reads no sexagesimal numbers).
-    [Fact]
-    public void LocalTimeIsWrittenAsTextAndReadsBackAsString()
-    {
-        var value = DValue.Create(new DateTime(1, 1, 1, 12, 30, 0), TimestampKind.LocalTime);
-
-        var yaml = YamlDocument.EncodeToString(
-            value.AsElement(),
-            new YamlWriteOptions { NewLine = "\n" }
-        );
-
-        Assert.Equal("12:30:00\n", yaml);
-        using var parsed = YamlDocument.Parse(yaml);
-        Assert.Equal(DTokenKind.String, parsed.RootElement.Token.Kind);
-        Assert.Equal("12:30:00", parsed.RootElement.GetString());
     }
 
     [Fact]

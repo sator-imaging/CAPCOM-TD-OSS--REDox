@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using REDox.Json;
@@ -491,13 +492,14 @@ public sealed partial class YamlDocument
         }
 
         ConsumeLineEnd();
-        // At the root (no parent indentation) the explicit indentation indicator counts from RootIndent.
+        // At the root (no parent indentation) the explicit indentation indicator counts from RootIndentationLevel.
         var contentIndent =
             explicitIndent == 0
                 ? -1
-                : (parentIndent < 0 ? _parseOptions.RootIndent : parentIndent) + explicitIndent;
+                : (parentIndent < 0 ? _parseOptions.RootIndentationLevel : parentIndent)
+                    + explicitIndent;
         // The lines of the scalar, as ranges of the source with the indentation cut off.
-        var lines = new System.Collections.Generic.List<(int Start, int End)>();
+        var lines = new List<(int Start, int End)>();
         var seenContent = false;
         var leadingBlankIndent = 0;
         while (_position < Source.Length)
@@ -600,6 +602,7 @@ public sealed partial class YamlDocument
     private bool IsMoreIndented((int Start, int End) line) =>
         line.End > line.Start && Source[line.Start] is YamlSyntax.Space or YamlSyntax.Tab;
 
+    /// <inheritdoc />
     protected override ReadOnlySpan<byte> DecodeUtf8Bytes(DToken token)
     {
         return ScalarBytes(token);
@@ -612,11 +615,40 @@ public sealed partial class YamlDocument
         YamlWriteOptions options,
         int depth,
         bool key
+    ) => WriteStringValue(writer, reader.ReadString(tokenId), options, depth, key);
+
+    // Binary data (a byte string, a Guid) has no YAML form without the !!binary tag, and tags are not supported, so it
+    // is written as the string it has in text formats: the Guid in its usual form, the other kinds as Base64,
+    // Base64Url or Base16. It reads back as that string.
+    private static void WriteByteString(
+        Utf8TextWriter writer,
+        in DataReader reader,
+        uint tokenId,
+        YamlWriteOptions options,
+        int depth,
+        bool key
     )
     {
-        var value = reader.ReadString(tokenId);
+        var kind = reader.GetToken(tokenId).ByteStringKind;
+        var encodeKind = kind is ByteStringKind.Raw or ByteStringKind.Inherit
+            ? ByteStringKind.Default
+            : kind;
+        var text = Encoding.UTF8.GetString(
+            Utf8Helper.EncodeByteString(reader.ReadByteString(tokenId), encodeKind)
+        );
 
-        if (!key && options.StringMode == YamlStringMode.Multiline)
+        WriteStringValue(writer, text, options, depth, key);
+    }
+
+    internal static void WriteStringValue(
+        Utf8TextWriter writer,
+        string value,
+        YamlWriteOptions options,
+        int depth,
+        bool key
+    )
+    {
+        if (!key && options.StringStyle == YamlStringStyle.Multiline)
         {
             WriteBlockString(writer, value, depth, options);
             return;

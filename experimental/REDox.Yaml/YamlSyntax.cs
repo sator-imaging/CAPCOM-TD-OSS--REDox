@@ -5,8 +5,8 @@ using System;
 using System.Buffers;
 using System.Collections.Frozen;
 using System.Collections.Generic;
-using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using REDox.Serialization;
 
@@ -75,6 +75,9 @@ internal static partial class YamlSyntax
     public const byte ExponentLower = (byte)'e';
     public const byte ExponentUpper = (byte)'E';
 
+    // The underscore that may stand between the digits of a number ("1_000")
+    public const byte Underscore = (byte)'_';
+
     // The digits an indentation indicator is made of (1 to 9), and the zero that a digit's value is counted from
     public const byte DigitZero = (byte)'0';
     public const byte DigitOne = (byte)'1';
@@ -124,8 +127,11 @@ internal static partial class YamlSyntax
         public const byte ParagraphSeparator = (byte)'P';
     }
 
-    // The prefixes of the hexadecimal and octal integers of the YAML 1.2 core schema ("0x1F", "0o14"). The YAML 1.1
-    // forms ("0b101", "0755" as octal, "1_000", "190:20:30") are not numbers here.
+    // The prefixes of the hexadecimal and octal integers of the YAML 1.2 core schema ("0x1F", "0o14") and of the binary
+    // integers of YAML 1.1 ("0b101"). The other YAML 1.1 forms are not numbers here: "0755" is the decimal 755, not an
+    // octal, and "190:20:30" is a string. The underscores that YAML 1.1 allows between digits ("1_000") are read.
+    public static ReadOnlySpan<byte> BinaryPrefixUtf8 => "0b"u8;
+
     public static ReadOnlySpan<byte> HexPrefixUtf8 => "0x"u8;
 
     public static ReadOnlySpan<byte> OctalPrefixUtf8 => "0o"u8;
@@ -186,7 +192,7 @@ internal static partial class YamlSyntax
 
     private static byte[][] ToUtf8(string[] words)
     {
-        return Array.ConvertAll(words, word => System.Text.Encoding.UTF8.GetBytes(word));
+        return Array.ConvertAll(words, word => Encoding.UTF8.GetBytes(word));
     }
 
     // Whether the bytes are one of the words.

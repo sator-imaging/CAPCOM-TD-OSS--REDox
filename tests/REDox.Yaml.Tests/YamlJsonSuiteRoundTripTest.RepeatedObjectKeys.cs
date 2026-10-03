@@ -21,11 +21,11 @@ public sealed partial class YamlJsonSuiteRoundTripTest
     public void DuplicateJsonKeysRoundTripWithValidationDisabled(string filePath)
     {
         using var source = JsonDocument.Parse(File.ReadAllBytes(filePath));
-        foreach (var mode in new[] { YamlStringMode.Quote, YamlStringMode.Multiline })
+        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
             var yaml = YamlDocument.EncodeToString(
                 source.RootElement,
-                new YamlWriteOptions { StringMode = mode }
+                new YamlWriteOptions { StringStyle = mode }
             );
             // JSON permits repeated member names; disable YAML key validation to retain every entry.
             using var parsed = YamlDocument.Parse(

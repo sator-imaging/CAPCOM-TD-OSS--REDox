@@ -6,6 +6,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.Unicode;
 using REDox.Json;
 using REDox.Serialization;
 
@@ -51,6 +52,11 @@ public sealed partial class YamlDocument : Document
         return document;
     }
 
+    /// <summary>
+    /// Returns the buffer that holds the scalars of the document to the array pool, and then disposes the document as
+    /// the base class does. The values of the document cannot be read afterwards.
+    /// </summary>
+    /// <param name="disposing">True when the document is disposed, false when it is finalized.</param>
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -182,7 +188,7 @@ public sealed partial class YamlDocument : Document
     /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
     /// <param name="options">How the YAML is written.</param>
     /// <returns>The UTF-8 bytes.</returns>
-    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringMode" />.</exception>
+    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
     public static byte[] Encode(DElement element, YamlWriteOptions options = default)
     {
         using var writer = new Utf8TextWriter(
@@ -202,7 +208,7 @@ public sealed partial class YamlDocument : Document
     /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
     /// <param name="options">How the YAML is written.</param>
     /// <returns>The YAML text.</returns>
-    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringMode" />.</exception>
+    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
     public static string EncodeToString(DElement element, YamlWriteOptions options = default)
     {
         using var writer = new Utf8TextWriter(
@@ -222,7 +228,7 @@ public sealed partial class YamlDocument : Document
     /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
     /// <param name="stream">The stream to write to.</param>
     /// <param name="options">How the YAML is written.</param>
-    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringMode" />.</exception>
+    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
     public static void EncodeTo(DElement element, Stream stream, YamlWriteOptions options = default)
     {
         using var writer = new Utf8TextWriter(
@@ -242,7 +248,7 @@ public sealed partial class YamlDocument : Document
     /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
     /// <param name="bufferWriter">The buffer writer to write to.</param>
     /// <param name="options">How the YAML is written.</param>
-    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringMode" />.</exception>
+    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
     public static void EncodeTo(
         DElement element,
         IBufferWriter<byte> bufferWriter,
@@ -406,7 +412,7 @@ public sealed partial class YamlDocument : Document
 
     private static ReadOnlyMemory<byte> RequireValidUtf8(ReadOnlyMemory<byte> text)
     {
-        if (!System.Text.Unicode.Utf8.IsValid(text.Span))
+        if (!Utf8.IsValid(text.Span))
         {
             throw new DecoderFallbackException("The text is not valid UTF-8.");
         }
@@ -487,8 +493,8 @@ public sealed partial class YamlDocument : Document
         };
 
         // A quoted scalar is always a string. A plain key is resolved like a plain value (null, boolean, number,
-        // timestamp or string), so "1: a" is a map entry whose key is the integer 1, unless ReadKeysAsStrings is set.
-        if (value.Quoted || (key || isKey) && _parseOptions.ReadKeysAsStrings)
+        // timestamp or string), so "1: a" is a map entry whose key is the integer 1, unless ReadMapKeyAsString is set.
+        if (value.Quoted || (key || isKey) && _parseOptions.ReadMapKeyAsString)
         {
             return CommitScalar(DTokenVariant.String, value);
         }
@@ -642,6 +648,9 @@ public sealed partial class YamlDocument : Document
             case DTokenKind.String:
             case DTokenKind.Symbol:
                 WriteString(writer, reader, tokenId, options, depth, key);
+                break;
+            case DTokenKind.ByteString:
+                WriteByteString(writer, reader, tokenId, options, depth, key);
                 break;
             default:
                 throw new NotSupportedException($"YAML does not support {token.Kind} values.");

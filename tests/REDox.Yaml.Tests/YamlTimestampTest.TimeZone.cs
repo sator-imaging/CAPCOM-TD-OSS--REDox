@@ -48,7 +48,7 @@ public sealed partial class YamlTimestampTest
     }
 
     private static YamlDocumentOptions In(TimeZoneInfo zone) =>
-        new YamlDocumentOptions { TimeZoneForUnspecifiedOffset = zone };
+        new YamlDocumentOptions { AssumedTimeZone = zone };
 
     [Fact]
     public void LocalZoneOfTheTestProcessIsMidPacific()

@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json;
 using REDox;
 
 namespace REDox.Yaml.Tests;
@@ -13,7 +14,7 @@ public sealed class YamlStringsTest
     [InlineData("|-\n  first\n", "first")]
     [InlineData(">\n  first\n  second\n", "first second\n")]
     [InlineData("|+\n  first\n  \n", "first\n\n")]
-    // At the root the default RootIndent of 0 counts "|2" from column 0 (see YamlOptionsTest for -1).
+    // At the root the default RootIndentationLevel of 0 counts "|2" from column 0 (see YamlOptionsTest for -1).
     [InlineData("|2-\n    indented\n", "  indented")]
     [InlineData("\"escaped \\x41\"", "escaped A")]
     [InlineData("\"emoji \\uD83D\\uDE00\"", "emoji 😀")]
@@ -41,14 +42,14 @@ public sealed class YamlStringsTest
     [InlineData("a\nb\n\n")]
     [InlineData(" leading")]
     [InlineData("")]
-    public void StringModesPreserveValue(string value)
+    public void StringStylesPreserveValue(string value)
     {
         var source = DValue.Create(value).AsElement();
-        foreach (var mode in new[] { YamlStringMode.Quote, YamlStringMode.Multiline })
+        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
             var yaml = YamlDocument.EncodeToString(
                 source,
-                new YamlWriteOptions { StringMode = mode }
+                new YamlWriteOptions { StringStyle = mode }
             );
             using var parsed = YamlDocument.Parse(yaml);
             Assert.Equal(value, parsed.RootElement.GetString());
@@ -113,7 +114,7 @@ public sealed class YamlStringsTest
     [InlineData("", false)]
     public void KeyIsQuotedOnlyWhenNeeded(string key, bool plain)
     {
-        var json = "{" + System.Text.Json.JsonSerializer.Serialize(key) + ":1}";
+        var json = "{" + JsonSerializer.Serialize(key) + ":1}";
         using var source = REDox.Json.JsonDocument.Parse(json);
         var yaml = YamlDocument.EncodeToString(
             source.RootElement,
@@ -164,7 +165,7 @@ public sealed class YamlStringsTest
     public void SpecialCharacterRoundTripsInKey(int codePoint)
     {
         var key = "k" + ((char)codePoint) + "k";
-        var json = "{" + System.Text.Json.JsonSerializer.Serialize(key) + ":1}";
+        var json = "{" + JsonSerializer.Serialize(key) + ":1}";
         using var source = REDox.Json.JsonDocument.Parse(json);
 
         var yaml = YamlDocument.EncodeToString(source.RootElement);
@@ -187,7 +188,7 @@ public sealed class YamlStringsTest
         Assert.Throws<NotSupportedException>(() =>
             YamlDocument.EncodeToString(
                 DValue.Create(value).AsElement(),
-                new YamlWriteOptions { StringMode = YamlStringMode.Multiline }
+                new YamlWriteOptions { StringStyle = YamlStringStyle.Multiline }
             )
         );
     }
@@ -204,7 +205,7 @@ public sealed class YamlStringsTest
 
         var yaml = YamlDocument.EncodeToString(
             DValue.Create(value).AsElement(),
-            new YamlWriteOptions { StringMode = YamlStringMode.Multiline }
+            new YamlWriteOptions { StringStyle = YamlStringStyle.Multiline }
         );
 
         using var parsed = YamlDocument.Parse(yaml);

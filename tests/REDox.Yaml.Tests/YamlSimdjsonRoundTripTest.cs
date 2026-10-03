@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using REDox;
 using REDox.Json;
 
@@ -18,17 +19,17 @@ public sealed class YamlSimdjsonRoundTripTest
         var bytes = File.ReadAllBytes(filePath);
         using var source = JsonDocument.Parse(bytes);
 
-        foreach (var mode in new[] { YamlStringMode.Quote, YamlStringMode.Multiline })
+        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
             string yaml;
             try
             {
                 yaml = YamlDocument.EncodeToString(
                     source.RootElement,
-                    new YamlWriteOptions { StringMode = mode }
+                    new YamlWriteOptions { StringStyle = mode }
                 );
             }
-            catch (NotSupportedException) when (mode == YamlStringMode.Multiline)
+            catch (NotSupportedException) when (mode == YamlStringStyle.Multiline)
             {
                 YamlTestHelper.AssertMultilineRefusalIsJustified(bytes, Path.GetFileName(filePath));
                 continue;
@@ -75,20 +76,20 @@ public sealed class YamlSimdjsonRoundTripTest
         for (var index = 0; index < lines.Length; index++)
         {
             using var source = JsonDocument.Parse(lines[index]);
-            foreach (var mode in new[] { YamlStringMode.Quote, YamlStringMode.Multiline })
+            foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
             {
                 string yaml;
                 try
                 {
                     yaml = YamlDocument.EncodeToString(
                         source.RootElement,
-                        new YamlWriteOptions { StringMode = mode }
+                        new YamlWriteOptions { StringStyle = mode }
                     );
                 }
-                catch (NotSupportedException) when (mode == YamlStringMode.Multiline)
+                catch (NotSupportedException) when (mode == YamlStringStyle.Multiline)
                 {
                     YamlTestHelper.AssertMultilineRefusalIsJustified(
-                        System.Text.Encoding.UTF8.GetBytes(lines[index]),
+                        Encoding.UTF8.GetBytes(lines[index]),
                         $"line {index + 1} of the ndjson file"
                     );
                     continue;

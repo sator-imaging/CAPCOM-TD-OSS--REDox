@@ -68,12 +68,12 @@ public sealed partial class YamlSpecConformanceTest
         Assert.ThrowsAny<NotSupportedException>(() =>
             YamlDocument.EncodeToString(
                 value,
-                new YamlWriteOptions { StringMode = YamlStringMode.Multiline }
+                new YamlWriteOptions { StringStyle = YamlStringStyle.Multiline }
             )
         );
         YamlDocument.EncodeToString(
             value,
-            new YamlWriteOptions { StringMode = YamlStringMode.Quote }
+            new YamlWriteOptions { StringStyle = YamlStringStyle.Quote }
         );
     }
 }

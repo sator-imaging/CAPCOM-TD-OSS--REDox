@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Linq;
 using REDox;
+using REDox.Json;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace REDox.Yaml.Tests;
 
@@ -234,7 +236,7 @@ public sealed class YamlMapTest
 
         // JSON keys are strings, so the keys of the YAML map are compared as the text they are written with.
         Assert.Equal(
-            REDox.Json.JsonDocument.EncodeToString(expected.RootElement),
+            JsonDocument.EncodeToString(expected.RootElement),
             JsonWithKeysAsText(document.RootElement)
         );
     }
@@ -249,7 +251,7 @@ public sealed class YamlMapTest
                     element
                         .AsMap()
                         .Select(pair =>
-                            System.Text.Json.JsonSerializer.Serialize(KeyText(pair.Key.AsElement()))
+                            JsonSerializer.Serialize(KeyText(pair.Key.AsElement()))
                             + ":"
                             + JsonWithKeysAsText(pair.Value.AsElement())
                         )
@@ -261,7 +263,7 @@ public sealed class YamlMapTest
                     element.AsArray().Select(item => JsonWithKeysAsText(item.AsElement()))
                 )
                 + "]",
-            _ => REDox.Json.JsonDocument.EncodeToString(element),
+            _ => JsonDocument.EncodeToString(element),
         };
     }
 
@@ -271,7 +273,7 @@ public sealed class YamlMapTest
             return "null";
 
         if (key.Token.Kind != DTokenKind.String)
-            return REDox.Json.JsonDocument.EncodeToString(key);
+            return JsonDocument.EncodeToString(key);
 
         var text = key.GetString();
         Debug.Assert(text != null); // GetString returns null only for a null token, which is handled above.

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Enumeration;
 using System.Linq;
+using System.Text;
 using REDox;
 using REDox.Json;
 
@@ -174,7 +175,7 @@ public sealed class YamlTestHelperTest
         bool justified
     )
     {
-        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+        var bytes = Encoding.UTF8.GetBytes(json);
 
         if (justified)
         {

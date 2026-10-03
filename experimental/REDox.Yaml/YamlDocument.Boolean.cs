@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using REDox.Serialization;
 
 namespace REDox.Yaml;
 
@@ -33,9 +34,6 @@ public sealed partial class YamlDocument
         return false;
     }
 
-    private static void WriteBoolean(
-        Utf8TextWriter writer,
-        in REDox.Serialization.DataReader reader,
-        uint tokenId
-    ) => writer.WriteBoolean(reader.ReadBoolean(tokenId));
+    private static void WriteBoolean(Utf8TextWriter writer, in DataReader reader, uint tokenId) =>
+        writer.WriteBoolean(reader.ReadBoolean(tokenId));
 }
