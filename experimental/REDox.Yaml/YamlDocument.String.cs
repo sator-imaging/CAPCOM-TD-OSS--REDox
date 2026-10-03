@@ -630,14 +630,18 @@ public sealed partial class YamlDocument
     )
     {
         var kind = reader.GetToken(tokenId).ByteStringKind;
+        var text = ByteStringText(reader.ReadByteString(tokenId), kind);
+
+        WriteStringValue(writer, text, options, depth, key);
+    }
+
+    internal static string ByteStringText(ReadOnlySpan<byte> bytes, ByteStringKind kind)
+    {
         var encodeKind = kind is ByteStringKind.Raw or ByteStringKind.Inherit
             ? ByteStringKind.Default
             : kind;
-        var text = Encoding.UTF8.GetString(
-            Utf8Helper.EncodeByteString(reader.ReadByteString(tokenId), encodeKind)
-        );
 
-        WriteStringValue(writer, text, options, depth, key);
+        return Encoding.UTF8.GetString(Utf8Helper.EncodeByteString(bytes, encodeKind));
     }
 
     internal static void WriteStringValue(

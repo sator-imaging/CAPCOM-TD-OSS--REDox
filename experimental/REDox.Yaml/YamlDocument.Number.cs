@@ -313,16 +313,24 @@ public sealed partial class YamlDocument
             }
 
             var value = reader.ReadDouble(tokenId);
-            if (double.IsPositiveInfinity(value))
-                writer.WriteString(YamlSyntax.InfinityUtf8);
-            else if (double.IsNegativeInfinity(value))
-                writer.WriteString(YamlSyntax.NegativeInfinityUtf8);
-            else if (double.IsNaN(value))
-                writer.WriteString(YamlSyntax.NotANumberUtf8);
-            else if (value == 0 && BitConverter.DoubleToInt64Bits(value) < 0)
-                writer.WriteString(YamlSyntax.NegativeZeroUtf8);
-            else
+            if (!TryWriteSpecialFloat(writer, value))
                 writer.WriteDouble(value);
         }
+    }
+
+    internal static bool TryWriteSpecialFloat(Utf8TextWriter writer, double value)
+    {
+        if (double.IsPositiveInfinity(value))
+            writer.WriteString(YamlSyntax.InfinityUtf8);
+        else if (double.IsNegativeInfinity(value))
+            writer.WriteString(YamlSyntax.NegativeInfinityUtf8);
+        else if (double.IsNaN(value))
+            writer.WriteString(YamlSyntax.NotANumberUtf8);
+        else if (value == 0 && BitConverter.DoubleToInt64Bits(value) < 0)
+            writer.WriteString(YamlSyntax.NegativeZeroUtf8);
+        else
+            return false;
+
+        return true;
     }
 }

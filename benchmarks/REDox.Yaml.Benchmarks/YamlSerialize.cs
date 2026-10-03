@@ -55,6 +55,6 @@ public class YamlSerialize<T, U>
     [BenchmarkCategory(nameof(REDox))]
     public byte[] REDoxYamlSerialize()
     {
-        return YamlDocument.Encode(DValue.From(Root).AsElement());
+        return YamlSerializer.Serialize<U>(Root, SerializerSettings.Default);
     }
 }

@@ -34,7 +34,7 @@ public class YamlDeserialize<T, U>
         var utf8Json = File.ReadAllBytes(DataSourceAttribute.GetFullPath<T>());
 
         var root = JsonSerializer.Deserialize<U>(utf8Json);
-        _yaml = YamlDocument.Encode(DValue.From(root).AsElement());
+        _yaml = YamlSerializer.Serialize(root);
 
         var json1 = JsonSerializer.Serialize(REDoxYamlDeserialize());
         var json2 = JsonSerializer.Serialize(root);
