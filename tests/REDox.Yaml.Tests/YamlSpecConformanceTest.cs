@@ -7,12 +7,13 @@ using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed class YamlTestSuiteTest
+public sealed partial class YamlSpecConformanceTest
 {
     // Every case in yaml-test-suite runs unless it is excluded here, so a case that starts to work is covered
     // without any change. Case IDs name a case directory; subcases keep their numeric component (e.g. "KH5V/00").
-    // The groups up to "Explicit and complex keys" are YAML features the library does not support on purpose; the groups after
-    // them are in scope but fail today, so this list doubles as the to-do list: delete an ID once its case passes.
+    // Every group is a YAML feature the library does not support on purpose. A case that is in scope but fails
+    // belongs in a group of its own, named after what is missing, so that this list doubles as the to-do list:
+    // delete an ID once its case passes.
     private static readonly HashSet<string> ExcludedCases =
     [
         // Anchors and aliases (&a, *a)
@@ -113,55 +114,18 @@ public sealed class YamlTestSuiteTest
         "RZT7",
         "S4T7",
         "U9NS",
-        // Explicit and complex keys (? key, { flow }: value)
-        "5WE3",
+        // Complex keys: a collection as a key (? - a, [ a ]: b, { a: b }: c). A scalar key, explicit or not, is supported.
         "6PBE",
-        "7W2P",
-        "A2M4",
-        "CT4Q",
-        "DFF7",
-        "GH63",
-        "JTV5",
         "KK5P",
         "M2N8/01",
         "M5DY",
-        "RR7F",
-        "S9E8",
-        "X8DW",
         "4FJ6",
         "Q9WF",
-        // Block scalars (empty scalar chomping)
-        "K858",
-        // Flow collections (implicit keys, multiline keys, single pairs, many lines)
-        "4MUZ/00",
-        "4MUZ/01",
-        "4MUZ/02",
-        "87E4",
-        "8KB6",
-        "8UDB",
-        "9BXH",
-        "CFD4",
-        "HM87/01",
-        "L9U5",
-        "LQZ7",
         "LX3P",
-        "NJ66",
-        "QF4Y",
-        "S7BG",
         "SBG9",
-        "VJP3/01",
-        // Unusual keys and colons (empty keys, adjacent values, special characters)
-        "2EBW",
-        "5MUD",
-        "8CWC",
         "9MMW",
-        "K3WX",
         "M2N8/00",
-        "UKK6/01",
         "V9D5",
-        // Other (lookahead, characters allowed in plain scalars)
-        "AZW3",
-        "FBC9",
     ];
 
     [Theory]
@@ -189,17 +153,35 @@ public sealed class YamlTestSuiteTest
         using var actualDocument = YamlDocument.Parse(yaml);
         var jsonPath = Path.Combine(caseDirectory, "in.json");
 
-        // An empty in.json means the stream holds no document. Core has no empty document, so the parser gives
-        // such input a null root (see YamlDocument.Read).
+        // An empty in.json means the stream holds no document, which has no value to compare with.
         if (File.Exists(jsonPath) && new FileInfo(jsonPath).Length == 0)
         {
-            Assert.Equal(DTokenKind.Null, actualDocument.RootElement.Token.Kind);
+            YamlTestHelper.IsEmptyDocument(actualDocument);
             return;
         }
 
-        // Without in.json the value cannot be compared; parsing successfully is all that can be checked.
+        // Without in.json the value cannot be written as JSON (a null key, for one). The expected output of the case,
+        // out.yaml or emit.yaml, is read the same way and must hold the same value. A case with neither is only checked
+        // for being a valid document.
         if (!File.Exists(jsonPath))
         {
+            Assert.True(actualDocument.IsValid);
+
+            var expectedPath = new[] { "out.yaml", "emit.yaml" }
+                .Select(name => Path.Combine(caseDirectory, name))
+                .FirstOrDefault(File.Exists);
+            if (expectedPath != null)
+            {
+                using var expectedDocument = YamlDocument.Parse(File.ReadAllText(expectedPath));
+                Assert.True(
+                    DValue.DeepEquals(
+                        expectedDocument.RootElement.AsValue(),
+                        actualDocument.RootElement.AsValue()
+                    ),
+                    $"YAML suite case {caseId} does not hold the value of {Path.GetFileName(expectedPath)}."
+                );
+            }
+
             return;
         }
 
@@ -213,8 +195,9 @@ public sealed class YamlTestSuiteTest
         );
     }
 
-    public static IEnumerable<object[]> GetCases()
+    public static TheoryData<string> GetCases()
     {
+        var cases = new TheoryData<string>();
         foreach (var directory in Directory.EnumerateDirectories(FindSuiteDirectory()).Order())
         {
             var id = Path.GetFileName(directory);
@@ -229,7 +212,7 @@ public sealed class YamlTestSuiteTest
             {
                 if (!ExcludedCases.Contains(id))
                 {
-                    yield return new object[] { id };
+                    cases.Add(id);
                 }
 
                 continue;
@@ -243,10 +226,12 @@ public sealed class YamlTestSuiteTest
                     && !ExcludedCases.Contains(subcaseId)
                 )
                 {
-                    yield return new object[] { subcaseId };
+                    cases.Add(subcaseId);
                 }
             }
         }
+
+        return cases;
     }
 
     private static string FindSuiteDirectory()

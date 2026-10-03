@@ -5,7 +5,7 @@ using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlJsonRoundTripTest
+public sealed partial class YamlJsonSuiteRoundTripTest
 {
     private static readonly string[] DuplicateKeyCasesWithValidationDisabled =
     [
@@ -43,11 +43,13 @@ public sealed partial class YamlJsonRoundTripTest
         }
     }
 
-    public static IEnumerable<object[]> GetDuplicateKeyFiles()
+    public static TheoryData<string> GetDuplicateKeyFiles()
     {
         var suite = FindSuiteDirectory();
-        return DuplicateKeyCasesWithValidationDisabled.Select(path =>
-            new object[] { Path.Combine(suite, path.Replace('/', Path.DirectorySeparatorChar)) }
+        return new TheoryData<string>(
+            DuplicateKeyCasesWithValidationDisabled.Select(path =>
+                Path.Combine(suite, path.Replace('/', Path.DirectorySeparatorChar))
+            )
         );
     }
 }

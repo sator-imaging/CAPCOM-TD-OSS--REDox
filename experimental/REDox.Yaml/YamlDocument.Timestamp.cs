@@ -12,12 +12,28 @@ public sealed partial class YamlDocument
     private TimeZoneInfo UnspecifiedOffsetTimeZone =>
         _parseOptions.TimeZoneForUnspecifiedOffset ?? TimeZoneInfo.Utc;
 
+    // A timestamp starts with a year of four digits and a dash ("2001-12-14"). Only a text that does is turned into a
+    // string for the pattern that decides the rest, so no other plain scalar costs a string.
+    private static bool StartsLikeTimestamp(ReadOnlySpan<byte> text)
+    {
+        return text.Length >= 8
+            && char.IsAsciiDigit((char)text[0])
+            && char.IsAsciiDigit((char)text[1])
+            && char.IsAsciiDigit((char)text[2])
+            && char.IsAsciiDigit((char)text[3])
+            && text[4] == YamlSyntax.Dash;
+    }
+
     // Whether a plain value is a timestamp is decided by YamlTimestampHelper. The text is stored exactly as it was
     // written (see WriteTimestamp), so nothing is normalized when the document is read.
-    private bool TryParseTimestamp(string text, out uint tokenId)
+    private bool TryParseTimestamp(ParsedScalar scalar, out uint tokenId)
     {
         tokenId = 0;
-        if (!YamlTimestampHelper.TryGetKind(text, out var kind))
+        var text = ScalarText(scalar);
+        if (
+            !StartsLikeTimestamp(text)
+            || !YamlTimestampHelper.TryGetKind(Encoding.UTF8.GetString(text), out var kind)
+        )
         {
             return false;
         }
@@ -29,7 +45,19 @@ public sealed partial class YamlDocument
             _ => DTokenVariant.TimestampOffsetDateTime,
         };
 
-        tokenId = StoreScalar(variant, text);
+        // The core reads a timestamp without an offset through DateTime and then converts it to a DateTimeOffset, which
+        // can only apply UTC (a Utc DateTime) or the local zone of the machine. A zone given in the options would be
+        // ignored, so such a timestamp is stored as an offset timestamp and read through DecodeDateTimeOffset, which
+        // applies the zone. The text, and so what is written, is the same either way.
+        if (
+            variant != DTokenVariant.TimestampOffsetDateTime
+            && UnspecifiedOffsetTimeZone != TimeZoneInfo.Utc
+        )
+        {
+            variant = DTokenVariant.TimestampOffsetDateTime;
+        }
+
+        tokenId = CommitScalar(variant, scalar);
         return true;
     }
 

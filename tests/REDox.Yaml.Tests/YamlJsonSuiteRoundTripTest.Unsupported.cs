@@ -7,7 +7,7 @@ using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlJsonRoundTripTest
+public sealed partial class YamlJsonSuiteRoundTripTest
 {
     private static readonly string[] UnsupportedIsolatedSurrogateCases =
     [
@@ -40,11 +40,13 @@ public sealed partial class YamlJsonRoundTripTest
         }
     }
 
-    public static IEnumerable<object[]> GetUnsupportedIsolatedSurrogateFiles()
+    public static TheoryData<string> GetUnsupportedIsolatedSurrogateFiles()
     {
         var suite = FindSuiteDirectory();
-        return UnsupportedIsolatedSurrogateCases.Select(path =>
-            new object[] { Path.Combine(suite, path.Replace('/', Path.DirectorySeparatorChar)) }
+        return new TheoryData<string>(
+            UnsupportedIsolatedSurrogateCases.Select(path =>
+                Path.Combine(suite, path.Replace('/', Path.DirectorySeparatorChar))
+            )
         );
     }
 }

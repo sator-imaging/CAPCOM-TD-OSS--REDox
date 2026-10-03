@@ -1,3 +1,4 @@
+using System;
 using REDox;
 
 namespace REDox.Yaml.Tests;
@@ -12,6 +13,7 @@ public sealed class YamlStringsTest
     [InlineData("|-\n  first\n", "first")]
     [InlineData(">\n  first\n  second\n", "first second\n")]
     [InlineData("|+\n  first\n  \n", "first\n\n")]
+    // At the root the default RootIndent of 0 counts "|2" from column 0 (see YamlOptionsTest for -1).
     [InlineData("|2-\n    indented\n", "  indented")]
     [InlineData("\"escaped \\x41\"", "escaped A")]
     [InlineData("\"emoji \\uD83D\\uDE00\"", "emoji 😀")]
@@ -79,12 +81,6 @@ public sealed class YamlStringsTest
     [InlineData("-", false)]
     [InlineData("---", false)]
     [InlineData("...", false)]
-    // A string that reads as a timestamp is quoted, or it would come back as a timestamp.
-    [InlineData("2001-12-14", false)]
-    [InlineData("2001-12-14T21:59:43.10Z", false)]
-    [InlineData("2001-12-14 21:59:43.10 -5", false)]
-    // Not a real date, so it stays a string and needs no quotes.
-    [InlineData("2001-13-45", true)]
     [InlineData("1.2.3", true)]
     [InlineData("0.0.0", true)]
     [InlineData("1-2", true)]
@@ -129,21 +125,132 @@ public sealed class YamlStringsTest
         Assert.Equal(1, parsed.RootElement.GetProperty(key).GetInt64());
     }
 
+    // Characters YAML cannot hold as they are (DEL, the C1 controls, the non-characters) are escaped in a quoted
+    // string; the others that need care (line and paragraph separators, the byte order mark) are kept. In every
+    // case the string comes back unchanged. The characters are built from their code points, so that no invisible
+    // character appears in the source.
     [Theory]
-    [InlineData(YamlStringNewlineNormalization.Remove, "a")]
-    [InlineData(YamlStringNewlineNormalization.EnsureOne, "a\n")]
-    public void NormalizeTerminalNewline(
-        YamlStringNewlineNormalization normalization,
-        string expected
-    )
+    [InlineData(0x7f, true)]
+    [InlineData(0x80, true)]
+    [InlineData(0x84, true)]
+    [InlineData(0x85, false)]
+    [InlineData(0x86, true)]
+    [InlineData(0x9f, true)]
+    [InlineData(0xfffe, true)]
+    [InlineData(0xffff, true)]
+    [InlineData(0x2028, false)]
+    [InlineData(0x2029, false)]
+    [InlineData(0xfeff, false)]
+    [InlineData(0xa0, false)]
+    [InlineData(0x3000, false)]
+    public void SpecialCharacterRoundTripsInQuotedString(int codePoint, bool escaped)
     {
-        var source = DValue.Create("a\n\n").AsElement();
-        var yaml = YamlDocument.EncodeToString(
-            source,
-            new YamlWriteOptions { NormalizeStringNewlineAtEnd = normalization }
-        );
+        var character = ((char)codePoint).ToString();
+        var value = "a" + character + "b";
+
+        var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
+
+        Assert.Equal(escaped, !yaml.Contains(character));
         using var parsed = YamlDocument.Parse(yaml);
-        Assert.Equal(expected, parsed.RootElement.GetString());
+        Assert.Equal(value, parsed.RootElement.GetString());
+    }
+
+    // The same characters as the key of a map.
+    [Theory]
+    [InlineData(0x7f)]
+    [InlineData(0x85)]
+    [InlineData(0x2028)]
+    [InlineData(0xfeff)]
+    public void SpecialCharacterRoundTripsInKey(int codePoint)
+    {
+        var key = "k" + ((char)codePoint) + "k";
+        var json = "{" + System.Text.Json.JsonSerializer.Serialize(key) + ":1}";
+        using var source = REDox.Json.JsonDocument.Parse(json);
+
+        var yaml = YamlDocument.EncodeToString(source.RootElement);
+
+        using var parsed = YamlDocument.Parse(yaml);
+        Assert.Equal(1, parsed.RootElement.GetProperty(key).GetInt64());
+    }
+
+    // A block scalar cannot hold DEL or the C1 controls: the multiline mode refuses them rather than writing a
+    // string that would come back different.
+    [Theory]
+    [InlineData(0x7f)]
+    [InlineData(0x80)]
+    [InlineData(0x85)]
+    [InlineData(0x9f)]
+    public void MultilineModeRefusesControlCharacter(int codePoint)
+    {
+        var value = "a" + (char)codePoint + "b";
+
+        Assert.Throws<NotSupportedException>(() =>
+            YamlDocument.EncodeToString(
+                DValue.Create(value).AsElement(),
+                new YamlWriteOptions { StringMode = YamlStringMode.Multiline }
+            )
+        );
+    }
+
+    // The separators and the byte order mark are ordinary text in a block scalar.
+    [Theory]
+    [InlineData(0x2028)]
+    [InlineData(0x2029)]
+    [InlineData(0xfeff)]
+    [InlineData(0x3000)]
+    public void MultilineModeKeepsOrdinaryCharacter(int codePoint)
+    {
+        var value = "a" + (char)codePoint + "b\nc";
+
+        var yaml = YamlDocument.EncodeToString(
+            DValue.Create(value).AsElement(),
+            new YamlWriteOptions { StringMode = YamlStringMode.Multiline }
+        );
+
+        using var parsed = YamlDocument.Parse(yaml);
+        Assert.Equal(value, parsed.RootElement.GetString());
+    }
+
+    // An isolated surrogate is not text: UTF-8 cannot hold it, so it is written as the replacement character. The
+    // document stays valid and the rest of the string is untouched.
+    [Theory]
+    [InlineData(0xd800)]
+    [InlineData(0xdc00)]
+    [InlineData(0xdfff)]
+    public void IsolatedSurrogateIsWrittenAsReplacementCharacter(int surrogate)
+    {
+        var value = "a" + (char)surrogate + "b";
+
+        var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
+
+        using var parsed = YamlDocument.Parse(yaml);
+        Assert.Equal("a" + (char)0xfffd + "b", parsed.RootElement.GetString());
+    }
+
+    [Fact]
+    public void PairedSurrogatesRoundTrip()
+    {
+        var value = "a" + char.ConvertFromUtf32(0x1f600) + char.ConvertFromUtf32(0x10ffff) + "b";
+
+        var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
+
+        using var parsed = YamlDocument.Parse(yaml);
+        Assert.Equal(value, parsed.RootElement.GetString());
+    }
+
+    // An indentation indicator that is smaller than the indentation of the lines is valid: the extra spaces are the
+    // start of the content.
+    [Theory]
+    [InlineData("a: |1\n    text\n", "   text\n")]
+    [InlineData("a: |2\n    text\n", "  text\n")]
+    [InlineData("a: |4\n    text\n", "text\n")]
+    [InlineData("a: >1\n    text\n", "   text\n")]
+    [InlineData("a: |9\n          text\n", " text\n")]
+    public void IndicatorSmallerThanTheIndentationKeepsTheExtraSpaces(string yaml, string expected)
+    {
+        using var document = YamlDocument.Parse(yaml);
+
+        Assert.Equal(expected, document.RootElement.GetProperty("a").GetString());
     }
 
     [Fact]

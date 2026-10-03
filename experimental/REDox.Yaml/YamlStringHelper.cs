@@ -2,20 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
-using System.Text.RegularExpressions;
 
 namespace REDox.Yaml;
 
-static partial class YamlStringHelper
+internal static class YamlStringHelper
 {
-    // A plain scalar must not start with a YAML indicator character.
-    private const string IndicatorStartCharacters = "-?:,[]{}#&*!|>'\"%@`";
-
-    // Numbers as the YAML 1.2 core schema reads them (decimal integers and floats). Other parsers resolve these
-    // as numbers even where this library's parser would not, e.g. ".5" and "5.".
-    [GeneratedRegex(@"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$")]
-    private static partial Regex CoreNumberPattern();
-
     /// <summary>
     /// Decides whether a string can be written without quotes and still be read back, unchanged, as a string.
     /// </summary>
@@ -33,7 +24,7 @@ static partial class YamlStringHelper
             return false;
         }
 
-        // Strings made only of '-', digits and '.' that do not read as another type (such as the version "1.2.3")
+        // Strings made only of dashes, digits and dots that do not read as another type (such as the version "1.2.3")
         // are written plain. They are checked first because the rules below quote anything that starts with an
         // indicator, a digit or a dot.
         if (IsDashDigitDot(value))
@@ -43,17 +34,25 @@ static partial class YamlStringHelper
 
         var first = value[0];
 
-        if (first is ' ' or '\t' || value[^1] is ' ' or '\t')
+        if (
+            first is (char)YamlSyntax.Space or (char)YamlSyntax.Tab
+            || value[^1] is (char)YamlSyntax.Space or (char)YamlSyntax.Tab
+        )
         {
             return false;
         }
 
-        // '.' and '+' start numbers such as ".5" and "+1"; a leading digit may be a number or a date.
+        // A dot and a plus start numbers such as ".5" and "+1"; a leading digit may be a number or a date.
         if (
-            IndicatorStartCharacters.Contains(first)
-            || first is '.' or '+'
+            YamlSyntax.IndicatorStarts.Contains(first)
+            || first is (char)YamlSyntax.Dot or (char)YamlSyntax.Plus
             || char.IsAsciiDigit(first)
         )
+        {
+            return false;
+        }
+
+        if (value.AsSpan().ContainsAny(YamlSyntax.NonPrintable))
         {
             return false;
         }
@@ -78,28 +77,31 @@ static partial class YamlStringHelper
                 continue;
             }
 
-            if (IsNonPrintable(c))
+            if (c == YamlSyntax.MappingValueIndicator)
             {
-                return false;
-            }
-
-            if (c == ':')
-            {
-                // The key scanner stops at any ':'; a value's ':' only ends it before a space or a flow delimiter.
-                if (isKey || i + 1 >= value.Length || value[i + 1] is ' ' or ',' or ']' or '}')
+                // The key scanner stops at any colon; a value's colon only ends it before a space or a flow delimiter.
+                if (
+                    isKey
+                    || i + 1 >= value.Length
+                    || value[i + 1]
+                        is (char)YamlSyntax.Space
+                            or (char)YamlSyntax.FlowSeparator
+                            or (char)YamlSyntax.FlowSequenceEnd
+                            or (char)YamlSyntax.FlowMappingEnd
+                )
                 {
                     return false;
                 }
             }
-            else if (c == '#')
+            else if (c == YamlSyntax.CommentIndicator)
             {
-                // " #" starts a comment. A key is also cut at any '#' when the parser looks for "key:".
-                if (isKey || value[i - 1] == ' ')
+                // A space and a hash start a comment. A key is also cut at any hash when the parser looks for "key:".
+                if (isKey || value[i - 1] == YamlSyntax.Space)
                 {
                     return false;
                 }
             }
-            else if (isKey && c is '\'' or '"')
+            else if (isKey && c is (char)YamlSyntax.SingleQuote or (char)YamlSyntax.DoubleQuote)
             {
                 // A quote inside a key makes the parser treat the rest of the line as a quoted string.
                 return false;
@@ -109,29 +111,13 @@ static partial class YamlStringHelper
         return !ReadsAsAnotherType(value);
     }
 
-    // Line breaks, tabs and other control characters need an escape or a block scalar, and the characters
-    // below are not printable in YAML (DEL, C1 controls, line/paragraph separators, BOM and non-characters).
-    // Code points are written as numbers on purpose, so that no invisible character appears in the source.
-    private static bool IsNonPrintable(char c)
-    {
-        return c < 0x20
-            || (int)c is >= 0x7f and <= 0x9f or 0x2028 or 0x2029 or 0xfeff or 0xfffe or 0xffff;
-    }
-
-    // Only '-', digits and '.', and not a lone "-" or the document markers "---" and "...", which are indicators.
+    // Only dashes, digits and dots, and not a lone "-" or the document markers "---" and "...", which are indicators.
     private static bool IsDashDigitDot(string value)
     {
-        foreach (var c in value)
-        {
-            if (c != '-' && c != '.' && !char.IsAsciiDigit(c))
-            {
-                return false;
-            }
-        }
-
-        return value != "-"
-            && !value.StartsWith("---", StringComparison.Ordinal)
-            && !value.StartsWith("...", StringComparison.Ordinal);
+        return !value.AsSpan().ContainsAnyExcept(YamlSyntax.DashDigitDot)
+            && value != YamlSyntax.DashText
+            && !value.StartsWith(YamlSyntax.DocumentStart, StringComparison.Ordinal)
+            && !value.StartsWith(YamlSyntax.DocumentEnd, StringComparison.Ordinal);
     }
 
     private static bool ReadsAsAnotherType(string value)
@@ -141,20 +127,14 @@ static partial class YamlStringHelper
             || YamlDocument.IsTrueText(value)
             || YamlDocument.IsFalseText(value)
             || YamlDocument.TryGetNumberVariant(value, out _)
-            || CoreNumberPattern().IsMatch(value)
+            || YamlSyntax.CoreNumberPattern().IsMatch(value)
             || YamlTimestampHelper.TryGetKind(value, out _)
         )
         {
             return true;
         }
 
-        // Not read as such by this parser, but by YAML 1.1 parsers and as the merge key.
-        return value.Equals("y", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("n", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("no", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("on", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("off", StringComparison.OrdinalIgnoreCase)
-            || value is "=" or "<<";
+        // Not read as such by this parser, but by YAML 1.1 parsers.
+        return YamlSyntax.Yaml11Words.Contains(value);
     }
 }

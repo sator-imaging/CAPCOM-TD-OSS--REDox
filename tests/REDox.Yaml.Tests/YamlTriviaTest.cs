@@ -41,6 +41,31 @@ public sealed class YamlTriviaTest
         using var reparsed = YamlDocument.Parse(encoded);
     }
 
+    // The white space in front of a trailing comment is kept as it was written, however long it is.
+    [Theory]
+    [InlineData("a: some       # comment\nb: 2\n")]
+    [InlineData("a: some\t# comment\nb: 2\n")]
+    [InlineData("a: some \t  \t # comment\nb: 2\n")]
+    [InlineData("a: 1\nb: some       # last\n")]
+    [InlineData("- 1     # one\n- 2          # two\n")]
+    [InlineData("a:\n  b: 1    # inner\n  c: 2\n")]
+    [InlineData("some       # comment\n")]
+    [InlineData("list:\n  - x      # x\n  - z\t\t# z\n")]
+    public void SpacesBeforeATrailingCommentAreKept(string yaml)
+    {
+        using var document = YamlDocument.Parse(
+            yaml,
+            options: new YamlDocumentOptions { PreserveTrivia = true }
+        );
+
+        var encoded = YamlDocument.EncodeToString(
+            document.RootElement,
+            new YamlWriteOptions { PreserveTrivia = true, NewLine = "\n" }
+        );
+
+        Assert.Equal(yaml, encoded);
+    }
+
     [Fact]
     public void TrailingCommentStaysOnItsLine()
     {
@@ -58,13 +83,13 @@ public sealed class YamlTriviaTest
 
     // Keys are always written double-quoted, so the expected text quotes them too.
     [Theory]
-    [InlineData("1: 1 # one\n2: 2 # two\n", "\"1\": 1 # one\n\"2\": 2 # two\n")]
+    [InlineData("1: 1 # one\n2: 2 # two\n", "1: 1 # one\n2: 2 # two\n")]
     [InlineData("- 1 # one\n- 2 # two\n", "- 1 # one\n- 2 # two\n")]
-    [InlineData("1:\n  2: 3 # inner\n4: 5\n", "\"1\":\n  \"2\": 3 # inner\n\"4\": 5\n")]
-    [InlineData("1:\n  # head\n  - 2\n", "\"1\":\n  # head\n  - 2\n")]
+    [InlineData("1:\n  2: 3 # inner\n4: 5\n", "1:\n  2: 3 # inner\n4: 5\n")]
+    [InlineData("1:\n  # head\n  - 2\n", "1:\n  # head\n  - 2\n")]
     // A comment on the key's line moves to its own line below it: Core cannot attach it to the key.
-    [InlineData("1: # key\n  - 2\n", "\"1\":\n  # key\n  - 2\n")]
-    [InlineData("# top\n1: 2\n\n# bottom\n", "# top\n\"1\": 2\n\n# bottom\n")]
+    [InlineData("1: # key\n  - 2\n", "1:\n  # key\n  - 2\n")]
+    [InlineData("# top\n1: 2\n\n# bottom\n", "# top\n1: 2\n\n# bottom\n")]
     public void CommentPositionsRoundTrip(string yaml, string expected)
     {
         using var document = YamlDocument.Parse(

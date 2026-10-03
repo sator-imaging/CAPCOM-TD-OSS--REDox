@@ -7,7 +7,7 @@ using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlJsonRoundTripTest
+public sealed partial class YamlJsonSuiteRoundTripTest
 {
     [Theory]
     [MemberData(nameof(GetValidJsonFiles))]
@@ -28,7 +28,7 @@ public sealed partial class YamlJsonRoundTripTest
             }
             catch (NotSupportedException) when (mode == YamlStringMode.Multiline)
             {
-                // The explicit multiline mode rejects strings that block scalars cannot represent.
+                YamlTestHelper.AssertMultilineRefusalIsJustified(bytes, Path.GetFileName(filePath));
                 continue;
             }
 
@@ -67,36 +67,24 @@ public sealed partial class YamlJsonRoundTripTest
         }
     }
 
-    public static IEnumerable<object[]> GetValidJsonFiles()
+    public static TheoryData<string> GetValidJsonFiles()
     {
         var suite = FindSuiteDirectory();
-        return Directory
-            .EnumerateFiles(Path.Combine(suite, "test_parsing"), "y_*.json")
-            .Concat(Directory.EnumerateFiles(Path.Combine(suite, "test_transform"), "*.json"))
-            .Where(path =>
-                !DuplicateKeyCasesWithValidationDisabled.Contains(
-                    Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'),
-                    StringComparer.Ordinal
+        return new TheoryData<string>(
+            YamlTestHelper
+                .GetJsonSuiteValidFiles()
+                .Where(path =>
+                    !DuplicateKeyCasesWithValidationDisabled.Contains(
+                        Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'),
+                        StringComparer.Ordinal
+                    )
+                    && !UnsupportedIsolatedSurrogateCases.Contains(
+                        Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'),
+                        StringComparer.Ordinal
+                    )
                 )
-                && !UnsupportedIsolatedSurrogateCases.Contains(
-                    Path.GetRelativePath(suite, path).Replace(Path.DirectorySeparatorChar, '/'),
-                    StringComparer.Ordinal
-                )
-            )
-            .Select(path => new object[] { path });
+        );
     }
 
-    private static string FindSuiteDirectory()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current != null)
-        {
-            var path = Path.Combine(current.FullName, "external", "JSONTestSuite");
-            if (Directory.Exists(Path.Combine(path, "test_parsing")))
-                return path;
-            current = current.Parent;
-        }
-
-        throw new DirectoryNotFoundException("JSONTestSuite has not been initialized.");
-    }
+    private static string FindSuiteDirectory() => YamlTestHelper.FindJsonSuiteDirectory();
 }

@@ -3,16 +3,31 @@ using REDox;
 
 namespace REDox.Yaml.Tests;
 
-public sealed class YamlErrorTest
+public sealed partial class YamlSpecConformanceTest
 {
     [Theory]
     [InlineData("&anchor value")]
     [InlineData("*alias")]
     [InlineData("!tag value")]
     [InlineData("%YAML 1.2")]
-    [InlineData("? complex\n: key\n")]
+    // A collection as a key (a scalar key, explicit or not, is supported)
+    [InlineData("? - a\n  - b\n: value\n")]
+    [InlineData("?\n- a\n: value\n")]
+    [InlineData("? [a, b]\n: value\n")]
+    [InlineData("? { a: b }\n: value\n")]
+    [InlineData("? a: b\n: value\n")]
+    [InlineData("[a, b]: value\n")]
+    [InlineData("{ a: b }: value\n")]
     [InlineData("first\n---\nsecond\n")]
     [InlineData("a: [1, 2")]
+    // An indentation indicator that is larger than the indentation of the lines: the lines are not part of the scalar
+    [InlineData("a: |5\n  text\n")]
+    [InlineData("a: >3\n  text\n")]
+    // A leading empty line with more spaces than the content indentation of the indicator
+    [InlineData("a: |2\n     \n  text\n")]
+    // An indentation indicator is one digit from 1 to 9
+    [InlineData("a: |10\n  text\n")]
+    [InlineData("a: |0\n  text\n")]
     [InlineData("a: b: c\n")]
     [InlineData("a: - b\n")]
     public void UnsupportedOrMalformedSyntaxFails(string yaml)

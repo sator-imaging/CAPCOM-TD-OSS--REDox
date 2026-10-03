@@ -7,20 +7,24 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
-    internal static bool IsTrueText(string text) => text is "true" or "True" or "TRUE";
+    internal static bool IsTrueText(string text) => YamlSyntax.TrueWords.Contains(text);
 
-    internal static bool IsFalseText(string text) => text is "false" or "False" or "FALSE";
+    internal static bool IsFalseText(string text) => YamlSyntax.FalseWords.Contains(text);
 
-    private bool TryParseBoolean(string text, out uint tokenId)
+    // A boolean needs no text of its own, so the bytes of the scalar are dropped.
+    private bool TryParseBoolean(ParsedScalar scalar, out uint tokenId)
     {
-        if (IsTrueText(text))
+        var text = ScalarText(scalar);
+        if (YamlSyntax.IsOneOf(text, YamlSyntax.TrueWordsUtf8))
         {
+            DiscardScalar(scalar);
             tokenId = AllocToken(DToken.Make(DTokenVariant.BooleanTrue, 0));
             return true;
         }
 
-        if (IsFalseText(text))
+        if (YamlSyntax.IsOneOf(text, YamlSyntax.FalseWordsUtf8))
         {
+            DiscardScalar(scalar);
             tokenId = AllocToken(DToken.Make(DTokenVariant.BooleanFalse, 0));
             return true;
         }

@@ -3,19 +3,11 @@
 
 using System;
 using System.Globalization;
-using System.Text.RegularExpressions;
 
 namespace REDox.Yaml;
 
-static partial class YamlTimestampHelper
+internal static class YamlTimestampHelper
 {
-    // The timestamp forms of YAML 1.1: "2001-12-14", "2001-12-14T21:59:43.10-05:00" and "2001-12-14 21:59:43.10 -5".
-    // Groups: 1 year, 2 month, 3 day, 4 hour, 5 minute, 6 second, 7 fraction (without the dot), 8 zone.
-    [GeneratedRegex(
-        @"^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:[Tt]|[ \t]+)([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]*))?(?:[ \t]*(Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?$"
-    )]
-    private static partial Regex TimestampPattern();
-
     private readonly record struct Parts(DateTime WallClock, TimeSpan? Offset, TimestampKind Kind);
 
     /// <summary>
@@ -76,7 +68,7 @@ static partial class YamlTimestampHelper
     {
         parts = default;
 
-        var match = TimestampPattern().Match(text);
+        var match = YamlSyntax.TimestampPattern().Match(text);
         if (!match.Success)
         {
             return false;
@@ -135,12 +127,12 @@ static partial class YamlTimestampHelper
     private static bool TryParseOffset(string zone, out TimeSpan offset)
     {
         offset = TimeSpan.Zero;
-        if (zone == "Z")
+        if (zone == YamlSyntax.UtcDesignator)
         {
             return true;
         }
 
-        var parts = zone[1..].Split(':');
+        var parts = zone[1..].Split((char)YamlSyntax.TimeFieldSeparator);
         var hours = int.Parse(parts[0], CultureInfo.InvariantCulture);
         var minutes = parts.Length > 1 ? int.Parse(parts[1], CultureInfo.InvariantCulture) : 0;
 
@@ -151,7 +143,7 @@ static partial class YamlTimestampHelper
         }
 
         offset = new TimeSpan(hours, minutes, 0);
-        if (zone[0] == '-')
+        if (zone[0] == YamlSyntax.Dash)
         {
             offset = -offset;
         }

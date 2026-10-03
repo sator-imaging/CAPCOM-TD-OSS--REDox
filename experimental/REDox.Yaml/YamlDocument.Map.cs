@@ -13,30 +13,48 @@ public sealed partial class YamlDocument
     private bool IsBlockMapStart()
     {
         var position = _position;
-        char quote = '\0';
-        while (position < _text.Length && !IsLineEnd(_text[position]))
+        byte quote = YamlSyntax.NoCharacter;
+        while (position < Source.Length && !IsLineEnd(Source[position]))
         {
-            var current = _text[position];
+            var current = Source[position];
             if (current == quote)
             {
-                if (quote == '\'' && position + 1 < _text.Length && _text[position + 1] == '\'')
+                if (
+                    quote == YamlSyntax.SingleQuote
+                    && position + 1 < Source.Length
+                    && Source[position + 1] == YamlSyntax.SingleQuote
+                )
                     position++;
                 else
-                    quote = '\0';
+                    quote = YamlSyntax.NoCharacter;
             }
-            else if (quote == '\0')
+            else if (quote == YamlSyntax.NoCharacter)
             {
-                if (current is '"' or '\'')
+                // A quote starts a quoted key only at the start of the key; inside a plain key it is text. The
+                // same goes for "#", which starts a comment only after white space.
+                if (
+                    current is YamlSyntax.DoubleQuote or YamlSyntax.SingleQuote
+                    && position == _position
+                )
                     quote = current;
                 else if (
-                    current == ':'
-                    && (position + 1 == _text.Length || char.IsWhiteSpace(_text[position + 1]))
+                    current == YamlSyntax.MappingValueIndicator
+                    && (
+                        position + 1 == Source.Length
+                        || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position + 1])
+                    )
                 )
                     return true;
-                else if (current == '#')
+                else if (
+                    current == YamlSyntax.CommentIndicator
+                    && (
+                        position == _position
+                        || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position - 1])
+                    )
+                )
                     break;
             }
-            else if (quote == '"' && current == '\\')
+            else if (quote == YamlSyntax.DoubleQuote && current == YamlSyntax.Backslash)
                 position++;
             position++;
         }
@@ -52,36 +70,195 @@ public sealed partial class YamlDocument
         _position++;
         SkipTrivia();
         CheckFlowIndent(parentIndent);
-        while (_position < _text.Length && _text[_position] != '}')
+        while (_position < Source.Length && Source[_position] != YamlSyntax.FlowMappingEnd)
         {
-            var keyId = ParseScalarNode(true, parentIndent, true);
-            ValidateUniqueKey(keys, keyId);
-            SkipInlineSpaces();
-            if (_position >= _text.Length || _text[_position++] != ':')
-                throw Error(ParseErrorCode.InvalidFormat);
+            ParseFlowPair(mapId, depth, parentIndent, keys);
             SkipTrivia();
             CheckFlowIndent(parentIndent);
-            if (_position < _text.Length && _text[_position] is ',' or '}')
-                ParseNull();
-            else
-                ParseNode(depth + 1, true, parentIndent);
-            IncToken(mapId);
-            SkipTrivia();
-            CheckFlowIndent(parentIndent);
-            if (_position >= _text.Length)
-                throw Error(ParseErrorCode.InvalidFormat);
-            if (_text[_position] == '}')
+            if (_position >= Source.Length)
+                throw Error(ParseException.ErrorCode.InvalidFormat);
+            if (Source[_position] == YamlSyntax.FlowMappingEnd)
                 break;
-            if (_text[_position++] != ',')
-                throw Error(ParseErrorCode.InvalidFormat);
+            if (Source[_position++] != YamlSyntax.FlowSeparator)
+                throw Error(ParseException.ErrorCode.InvalidFormat);
             SkipTrivia();
             CheckFlowIndent(parentIndent);
         }
 
-        if (_position >= _text.Length || _text[_position++] != '}')
-            throw Error(ParseErrorCode.InvalidFormat);
+        if (_position >= Source.Length || Source[_position++] != YamlSyntax.FlowMappingEnd)
+            throw Error(ParseException.ErrorCode.InvalidFormat);
         CompleteContainer(mapId);
         return mapId;
+    }
+
+    // One "key: value" entry of a flow mapping, also used for the single pair in a flow sequence. The colon may be on
+    // a later line than its key, and a key without a colon has a null value ("{ a, b: c }").
+    private void ParseFlowPair(uint mapId, int depth, int parentIndent, HashSet<string>? keys)
+    {
+        uint keyId;
+        if (IsExplicitKeyStart(true))
+        {
+            // "? key": the key may span lines, and nothing after the "?" is a null key. A collection is not supported.
+            _position++;
+            SkipTrivia();
+            CheckFlowIndent(parentIndent);
+            if (_position >= Source.Length)
+                throw Error(ParseException.ErrorCode.InvalidFormat);
+
+            if (
+                Source[_position]
+                is YamlSyntax.FlowSeparator
+                    or YamlSyntax.FlowMappingEnd
+                    or YamlSyntax.FlowSequenceEnd
+                    or YamlSyntax.MappingValueIndicator
+            )
+                keyId = ParseNull();
+            else if (
+                Source[_position] is YamlSyntax.FlowSequenceStart or YamlSyntax.FlowMappingStart
+            )
+                throw Error(ParseException.ErrorCode.UnsupportedFeature);
+            else
+                keyId = ParseScalarNode(false, parentIndent, true, isKey: true);
+        }
+        else
+        {
+            keyId = ParseScalarNode(true, parentIndent, true);
+        }
+
+        ValidateKey(keys, keyId);
+        SkipTrivia();
+        CheckFlowIndent(parentIndent);
+        if (_position >= Source.Length)
+            throw Error(ParseException.ErrorCode.InvalidFormat);
+
+        if (Source[_position] == YamlSyntax.MappingValueIndicator)
+        {
+            _position++;
+            SkipTrivia();
+            CheckFlowIndent(parentIndent);
+            if (
+                _position < Source.Length
+                && Source[_position]
+                    is YamlSyntax.FlowSeparator
+                        or YamlSyntax.FlowMappingEnd
+                        or YamlSyntax.FlowSequenceEnd
+            )
+                ParseNull();
+            else
+                ParseNode(depth + 1, true, parentIndent);
+        }
+        else if (
+            Source[_position]
+            is YamlSyntax.FlowSeparator
+                or YamlSyntax.FlowMappingEnd
+                or YamlSyntax.FlowSequenceEnd
+        )
+        {
+            ParseNull();
+        }
+        else
+        {
+            throw Error(ParseException.ErrorCode.InvalidFormat);
+        }
+
+        IncToken(mapId);
+    }
+
+    // A single "key: value" pair directly inside a flow sequence is a one-entry mapping ("[ foo: bar ]").
+    private uint ParseFlowSinglePair(int depth, int parentIndent)
+    {
+        var mapId = AllocToken(DToken.MakeMap(0));
+        ParseFlowPair(mapId, depth, parentIndent, null);
+        CompleteContainer(mapId);
+        return mapId;
+    }
+
+    // Looks ahead on the current line: a quoted or plain scalar followed by ":" starts a single pair. An implicit
+    // key never spans lines.
+    private bool IsFlowSinglePairStart()
+    {
+        var position = _position;
+        if (Source[position] is YamlSyntax.DoubleQuote or YamlSyntax.SingleQuote)
+        {
+            var quote = Source[position++];
+            while (position < Source.Length && !IsLineEnd(Source[position]))
+            {
+                var current = Source[position++];
+                if (quote == YamlSyntax.DoubleQuote && current == YamlSyntax.Backslash)
+                {
+                    position++;
+                    continue;
+                }
+
+                if (current != quote)
+                    continue;
+
+                if (
+                    quote == YamlSyntax.SingleQuote
+                    && position < Source.Length
+                    && Source[position] == YamlSyntax.SingleQuote
+                )
+                {
+                    position++;
+                    continue;
+                }
+
+                while (
+                    position < Source.Length
+                    && Source[position] is YamlSyntax.Space or YamlSyntax.Tab
+                )
+                    position++;
+
+                return position < Source.Length
+                    && Source[position] == YamlSyntax.MappingValueIndicator;
+            }
+
+            return false;
+        }
+
+        while (position < Source.Length)
+        {
+            var current = Source[position];
+            if (IsLineEnd(current) || YamlSyntax.IsFlowIndicator(current))
+                return false;
+            if (
+                current == YamlSyntax.CommentIndicator
+                && position > _position
+                && YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position - 1])
+            )
+                return false;
+            if (
+                current == YamlSyntax.MappingValueIndicator
+                && (
+                    position + 1 == Source.Length
+                    || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position + 1])
+                    || Source[position + 1]
+                        is YamlSyntax.FlowSeparator
+                            or YamlSyntax.FlowSequenceEnd
+                            or YamlSyntax.FlowMappingEnd
+                )
+            )
+                return true;
+            position++;
+        }
+
+        return false;
+    }
+
+    // "?" is the explicit key indicator only when it stands alone: followed by white space or the end of the text, or,
+    // in a flow collection, by a flow indicator. "?x" is a plain scalar.
+    private bool IsExplicitKeyStart(bool flow)
+    {
+        if (Source[_position] != YamlSyntax.ExplicitKeyIndicator)
+            return false;
+
+        return _position + 1 == Source.Length
+            || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[_position + 1])
+            || flow
+                && Source[_position + 1]
+                    is YamlSyntax.FlowSeparator
+                        or YamlSyntax.FlowSequenceEnd
+                        or YamlSyntax.FlowMappingEnd;
     }
 
     private uint ParseBlockMap(int depth)
@@ -91,53 +268,26 @@ public sealed partial class YamlDocument
         HashSet<string>? keys = _parseOptions.EnableValueValidation
             ? new(StringComparer.Ordinal)
             : null;
-        while (_position < _text.Length && IsBlockMapStart())
+        while (_position < Source.Length && (IsExplicitKeyStart(false) || IsBlockMapStart()))
         {
-            var keyId = ParseScalarNode(true);
-            ValidateUniqueKey(keys, keyId);
-            SkipInlineSpaces();
-            if (_position >= _text.Length || _text[_position++] != ':')
-                throw Error(ParseErrorCode.InvalidFormat);
-            SkipInlineSpaces();
-            if (_position >= _text.Length || IsLineEnd(_text[_position]) || _text[_position] == '#')
+            if (IsExplicitKeyStart(false))
             {
-                SkipLineRemainder();
-                var following = PeekNextContent();
-                // A block sequence used as a mapping value may start at the key's indentation.
-                if (
-                    following.Indent > baseIndent
-                    || following.Indent == baseIndent
-                        && IsBlockSequenceIndicator(following.Position)
-                )
-                {
-                    SkipTrivia();
-                    ParseNode(depth + 1, parentIndent: baseIndent);
-                }
-                else
-                {
-                    ParseNull();
-                }
+                ParseExplicitMapEntry(depth, baseIndent, keys);
             }
             else
             {
-                var lineStart = LastLineStart(_position);
-                ParseNode(depth + 1, parentIndent: baseIndent, mapValueOnKeyLine: true);
-
-                if (LastLineStart(_position) == lineStart)
-                {
-                    ExpectLineEnd();
-                }
+                ParseImplicitMapEntry(depth, baseIndent, keys);
             }
 
             IncToken(mapId);
             SkipTrivia();
             var next = PeekNextContent();
-            if (next.Indent != baseIndent || next.Position >= _text.Length)
+            if (next.Indent != baseIndent || next.Position >= Source.Length)
                 break;
             _position = next.Position;
             if (IndentationContainsTab(_position))
-                throw Error(ParseErrorCode.InvalidFormat);
-            if (!IsBlockMapStart())
+                throw Error(ParseException.ErrorCode.InvalidFormat);
+            if (!IsExplicitKeyStart(false) && !IsBlockMapStart())
                 break;
         }
 
@@ -145,11 +295,162 @@ public sealed partial class YamlDocument
         return mapId;
     }
 
-    private void ValidateUniqueKey(HashSet<string>? keys, uint keyId)
+    // "key: value"
+    private void ParseImplicitMapEntry(int depth, int baseIndent, HashSet<string>? keys)
     {
-        if (keys != null && !keys.Add(Encoding.UTF8.GetString(ScalarBytes(GetToken(keyId)))))
+        var keyId = ParseScalarNode(true);
+        ValidateKey(keys, keyId);
+        SkipInlineSpaces();
+        if (_position >= Source.Length || Source[_position++] != YamlSyntax.MappingValueIndicator)
+            throw Error(ParseException.ErrorCode.InvalidFormat);
+        SkipInlineSpaces();
+        if (
+            _position >= Source.Length
+            || IsLineEnd(Source[_position])
+            || Source[_position] == YamlSyntax.CommentIndicator
+        )
         {
-            throw Error(ParseErrorCode.InvalidFormat);
+            ParseMapValueOnFollowingLines(depth, baseIndent);
+        }
+        else
+        {
+            var lineStart = LastLineStart(_position);
+            ParseNode(depth + 1, parentIndent: baseIndent, mapValueOnKeyLine: true);
+
+            if (LastLineStart(_position) == lineStart)
+            {
+                ExpectLineEnd();
+            }
+        }
+    }
+
+    // The value of an entry that has nothing after its ":" on the line: the following lines, or null.
+    private void ParseMapValueOnFollowingLines(int depth, int baseIndent)
+    {
+        SkipLineRemainder();
+        var following = PeekNextContent();
+        // A block sequence used as a mapping value may start at the key's indentation.
+        if (
+            following.Indent > baseIndent
+            || following.Indent == baseIndent && IsBlockSequenceIndicator(following.Position)
+        )
+        {
+            SkipTrivia();
+            ParseNode(depth + 1, parentIndent: baseIndent);
+        }
+        else
+        {
+            ParseNull();
+        }
+    }
+
+    // "? key" and the optional ": value" at the same indentation. Only a scalar can be the key; a collection as a key is
+    // not supported. The value may start on the line of the ":" even when it is a block collection ("? a" and
+    // ": - b"), and an entry without ": value" has a null value.
+    private void ParseExplicitMapEntry(int depth, int baseIndent, HashSet<string>? keys)
+    {
+        _position++;
+        var keyId = ParseExplicitKey(depth, baseIndent);
+        ValidateKey(keys, keyId);
+        SkipTrivia();
+
+        if (
+            _position < Source.Length
+            && Source[_position] == YamlSyntax.MappingValueIndicator
+            && _position - LastLineStart(_position) == baseIndent
+            && (
+                _position + 1 == Source.Length
+                || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[_position + 1])
+            )
+        )
+        {
+            _position++;
+            SkipInlineSpaces();
+            if (
+                _position >= Source.Length
+                || IsLineEnd(Source[_position])
+                || Source[_position] == YamlSyntax.CommentIndicator
+            )
+            {
+                ParseMapValueOnFollowingLines(depth, baseIndent);
+            }
+            else
+            {
+                var lineStart = LastLineStart(_position);
+                ParseNode(depth + 1, parentIndent: baseIndent);
+                if (LastLineStart(_position) == lineStart)
+                {
+                    ExpectLineEnd();
+                }
+            }
+        }
+        else
+        {
+            ParseNull();
+        }
+    }
+
+    // The key after "?": a scalar on the same line, or on the following lines, or nothing (a null key).
+    private uint ParseExplicitKey(int depth, int baseIndent)
+    {
+        SkipInlineSpaces();
+        if (
+            _position >= Source.Length
+            || IsLineEnd(Source[_position])
+            || Source[_position] == YamlSyntax.CommentIndicator
+        )
+        {
+            SkipLineRemainder();
+            var following = PeekNextContent();
+            if (following.Indent > baseIndent)
+            {
+                SkipTrivia();
+                return ParseExplicitKeyScalar(depth, baseIndent);
+            }
+
+            // A sequence at the indentation of the "?" is the key (a collection).
+            if (following.Indent == baseIndent && IsBlockSequenceIndicator(following.Position))
+                throw Error(ParseException.ErrorCode.UnsupportedFeature);
+
+            return ParseNull();
+        }
+
+        return ParseExplicitKeyScalar(depth, baseIndent);
+    }
+
+    private uint ParseExplicitKeyScalar(int depth, int baseIndent)
+    {
+        if (
+            Source[_position] is YamlSyntax.FlowSequenceStart or YamlSyntax.FlowMappingStart
+            || IsBlockSequenceIndicator()
+            || IsExplicitKeyStart(false)
+            || IsBlockMapStart()
+        )
+        {
+            throw Error(ParseException.ErrorCode.UnsupportedFeature);
+        }
+
+        return ParseNode(depth + 1, parentIndent: baseIndent, mapValueOnKeyLine: true, isKey: true);
+    }
+
+    private void ValidateKey(HashSet<string>? keys, uint keyId)
+    {
+        var token = GetToken(keyId);
+
+        // A key with no text is a null key; with ReadKeysAsStrings there is no string to read ("null" as a key is
+        // text, and is read as the string "null").
+        if (_parseOptions.ReadKeysAsStrings && token.Kind == DTokenKind.Null)
+        {
+            throw Error(ParseException.ErrorCode.InvalidFormat);
+        }
+
+        // Keys are the same when their types and their texts are: the integer 1 and the string "1" are different keys.
+        if (
+            keys != null
+            && !keys.Add($"{token.Kind}:{Encoding.UTF8.GetString(ScalarBytes(token))}")
+        )
+        {
+            throw Error(ParseException.ErrorCode.InvalidFormat);
         }
     }
 
@@ -164,7 +465,7 @@ public sealed partial class YamlDocument
         var count = reader.GetValueCount(mapId);
         if (count == 0)
         {
-            writer.WriteString("{}"u8);
+            writer.WriteString(YamlSyntax.EmptyMappingUtf8);
             return;
         }
 
@@ -188,7 +489,7 @@ public sealed partial class YamlDocument
                 skipInlineComment: separatorWritten
             );
             WriteNode(writer, reader, pair.Key, options, depth, true);
-            writer.WriteUtf8Byte((byte)':');
+            writer.WriteUtf8Byte((byte)YamlSyntax.MappingValueIndicator);
             var value = reader.GetToken(pair.Value);
             var block = value.IsContainer && reader.GetValueCount(pair.Value) > 0;
             writer.PushIndent();
@@ -200,7 +501,7 @@ public sealed partial class YamlDocument
             }
             else
             {
-                writer.WriteUtf8Byte((byte)' ');
+                writer.WriteUtf8Byte((byte)YamlSyntax.Space);
             }
             WriteNode(writer, reader, pair.Value, options, depth + 1, false);
             // "key: # note" followed by a non-block value: only a block scalar would swallow the comment.

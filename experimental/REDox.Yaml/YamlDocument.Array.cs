@@ -15,8 +15,11 @@ public sealed partial class YamlDocument
 
     private bool IsBlockSequenceIndicator(int position)
     {
-        return _text[position] == '-'
-            && (position + 1 == _text.Length || char.IsWhiteSpace(_text[position + 1]));
+        return Source[position] == YamlSyntax.Dash
+            && (
+                position + 1 == Source.Length
+                || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position + 1])
+            );
     }
 
     private uint ParseFlowArray(int depth, int parentIndent)
@@ -25,26 +28,34 @@ public sealed partial class YamlDocument
         _position++;
         SkipTrivia();
         CheckFlowIndent(parentIndent);
-        while (_position < _text.Length && _text[_position] != ']')
+        while (_position < Source.Length && Source[_position] != YamlSyntax.FlowSequenceEnd)
         {
-            if (_text[_position] == ',')
-                throw Error(ParseErrorCode.InvalidFormat);
-            ParseNode(depth + 1, true, parentIndent);
+            if (Source[_position] == YamlSyntax.FlowSeparator)
+                throw Error(ParseException.ErrorCode.InvalidFormat);
+            if (
+                IsExplicitKeyStart(true)
+                || Source[_position]
+                    is not (YamlSyntax.FlowSequenceStart or YamlSyntax.FlowMappingStart)
+                    && IsFlowSinglePairStart()
+            )
+                ParseFlowSinglePair(depth + 1, parentIndent);
+            else
+                ParseNode(depth + 1, true, parentIndent);
             IncToken(arrayId);
             SkipTrivia();
             CheckFlowIndent(parentIndent);
-            if (_position >= _text.Length)
-                throw Error(ParseErrorCode.InvalidFormat);
-            if (_text[_position] == ']')
+            if (_position >= Source.Length)
+                throw Error(ParseException.ErrorCode.InvalidFormat);
+            if (Source[_position] == YamlSyntax.FlowSequenceEnd)
                 break;
-            if (_text[_position++] != ',')
-                throw Error(ParseErrorCode.InvalidFormat);
+            if (Source[_position++] != YamlSyntax.FlowSeparator)
+                throw Error(ParseException.ErrorCode.InvalidFormat);
             SkipTrivia();
             CheckFlowIndent(parentIndent);
         }
 
-        if (_position >= _text.Length || _text[_position++] != ']')
-            throw Error(ParseErrorCode.InvalidFormat);
+        if (_position >= Source.Length || Source[_position++] != YamlSyntax.FlowSequenceEnd)
+            throw Error(ParseException.ErrorCode.InvalidFormat);
         CompleteContainer(arrayId);
         return arrayId;
     }
@@ -53,13 +64,17 @@ public sealed partial class YamlDocument
     {
         var baseIndent = _position - LastLineStart(_position);
         var arrayId = AllocToken(DToken.MakeArray(0));
-        while (_position < _text.Length && IsBlockSequenceIndicator())
+        while (_position < Source.Length && IsBlockSequenceIndicator())
         {
             _position++;
             var separatorStart = _position;
             SkipInlineSpaces();
-            var tabSeparated = _text.AsSpan(separatorStart.._position).Contains('\t');
-            if (_position == _text.Length || IsLineEnd(_text[_position]) || _text[_position] == '#')
+            var tabSeparated = Source[separatorStart.._position].Contains(YamlSyntax.Tab);
+            if (
+                _position == Source.Length
+                || IsLineEnd(Source[_position])
+                || Source[_position] == YamlSyntax.CommentIndicator
+            )
             {
                 SkipLineRemainder();
                 var next = PeekNextContent();
@@ -78,7 +93,7 @@ public sealed partial class YamlDocument
                 // A tab cannot separate the "-" from a nested block collection: its column would be undefined.
                 if (tabSeparated && (IsBlockSequenceIndicator() || IsBlockMapStart()))
                 {
-                    throw Error(ParseErrorCode.InvalidFormat);
+                    throw Error(ParseException.ErrorCode.InvalidFormat);
                 }
 
                 var lineStart = LastLineStart(_position);
@@ -92,13 +107,13 @@ public sealed partial class YamlDocument
             IncToken(arrayId);
             SkipTrivia();
             var following = PeekNextContent();
-            if (following.Indent != baseIndent || following.Position >= _text.Length)
+            if (following.Indent != baseIndent || following.Position >= Source.Length)
             {
                 break;
             }
             _position = following.Position;
             if (IndentationContainsTab(_position))
-                throw Error(ParseErrorCode.InvalidFormat);
+                throw Error(ParseException.ErrorCode.InvalidFormat);
             if (!IsBlockSequenceIndicator())
                 break;
         }
@@ -118,7 +133,7 @@ public sealed partial class YamlDocument
         var count = reader.GetValueCount(arrayId);
         if (count == 0)
         {
-            writer.WriteString("[]"u8);
+            writer.WriteString(YamlSyntax.EmptySequenceUtf8);
             return;
         }
 
@@ -140,7 +155,7 @@ public sealed partial class YamlDocument
                 separatorWritten,
                 skipInlineComment: separatorWritten
             );
-            writer.WriteUtf8Byte((byte)'-');
+            writer.WriteUtf8Byte((byte)YamlSyntax.Dash);
             var value = reader.GetToken(valueId);
             writer.PushIndent();
             if (value.IsContainer && reader.GetValueCount(valueId) > 0)
@@ -149,7 +164,7 @@ public sealed partial class YamlDocument
             }
             else
             {
-                writer.WriteUtf8Byte((byte)' ');
+                writer.WriteUtf8Byte((byte)YamlSyntax.Space);
             }
             WriteNode(writer, reader, valueId, options, depth + 1, false);
             writer.PopIndent();

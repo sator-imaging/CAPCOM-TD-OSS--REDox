@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Linq;
 using REDox;
 
 namespace REDox.Yaml.Tests;
@@ -35,6 +37,26 @@ public sealed class YamlMapTest
         );
     }
 
+    // The block and flow shapes of a map, each checked against the value it must stand for.
+    [Theory]
+    [InlineData("a:\n", "{\"a\":null}")]
+    [InlineData("a:\nb: 1\n", "{\"a\":null,\"b\":1}")]
+    [InlineData("a: ~\nb:\n", "{\"a\":null,\"b\":null}")]
+    [InlineData("'a b': 1\n\"c\": 2\n", "{\"a b\":1,\"c\":2}")]
+    [InlineData("'it''s': 1\n\"tab\\tkey\": 2\n", "{\"it's\":1,\"tab\\tkey\":2}")]
+    [InlineData("a:\n  b:\n    c: 1\n", "{\"a\":{\"b\":{\"c\":1}}}")]
+    [InlineData("a: {b: 1}\nc: [2]\n", "{\"a\":{\"b\":1},\"c\":[2]}")]
+    [InlineData("{a: 1, b: 2, }", "{\"a\":1,\"b\":2}")]
+    [InlineData("{'x y': 1, \"z\": 2}", "{\"x y\":1,\"z\":2}")]
+    [InlineData("{a, b: 1}", "{\"a\":null,\"b\":1}")]
+    [InlineData("{\n  a: 1,\n  b: [2,\n    3],\n}\n", "{\"a\":1,\"b\":[2,3]}")]
+    [InlineData("a: {\n  b: 1,\n  c: 2\n }\n", "{\"a\":{\"b\":1,\"c\":2}}")]
+    [InlineData("a:\n  - b: 1\n    c: 2\n  - d: 3\n", "{\"a\":[{\"b\":1,\"c\":2},{\"d\":3}]}")]
+    public void MapShapes(string yaml, string expectedJson)
+    {
+        YamlTestHelper.ParsesAs(yaml, expectedJson);
+    }
+
     [Theory]
     [InlineData("a:\n  b: 1\n")]
     public void ParseNestedMap(string yaml)
@@ -66,6 +88,194 @@ public sealed class YamlMapTest
         Assert.True(
             DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
         );
+    }
+
+    // A plain key is resolved like a plain value; a quoted key is a string. Only what a DElement can hold is a key:
+    // null, boolean, number, timestamp and string. A collection as a key is not supported.
+    [Theory]
+    [InlineData("1: a\n", DTokenKind.Integer)]
+    [InlineData("-7: a\n", DTokenKind.Integer)]
+    [InlineData("0x1F: a\n", DTokenKind.Integer)]
+    [InlineData("1.5: a\n", DTokenKind.Float)]
+    [InlineData(".inf: a\n", DTokenKind.Float)]
+    [InlineData("true: a\n", DTokenKind.Boolean)]
+    [InlineData("false: a\n", DTokenKind.Boolean)]
+    [InlineData("null: a\n", DTokenKind.Null)]
+    [InlineData("~: a\n", DTokenKind.Null)]
+    [InlineData("2001-12-14: a\n", DTokenKind.Timestamp)]
+    [InlineData("2001-12-14T21:59:43Z: a\n", DTokenKind.Timestamp)]
+    [InlineData("text: a\n", DTokenKind.String)]
+    [InlineData("\"1\": a\n", DTokenKind.String)]
+    [InlineData("'true': a\n", DTokenKind.String)]
+    [InlineData("\"2001-12-14\": a\n", DTokenKind.String)]
+    [InlineData("1.2.3: a\n", DTokenKind.String)]
+    [InlineData("{1: a}", DTokenKind.Integer)]
+    [InlineData("{true: a}", DTokenKind.Boolean)]
+    [InlineData("[1: a]", DTokenKind.Integer)]
+    public void KeyIsResolvedLikeAValue(string yaml, DTokenKind kind)
+    {
+        using var document = YamlDocument.Parse(yaml);
+        var map =
+            document.RootElement.Token.Type == DTokenType.Array
+                ? document.RootElement.AsArray()[0].AsElement().AsMap()
+                : document.RootElement.AsMap();
+
+        Assert.Single(map);
+        Assert.Equal(kind, map[0].Key.AsElement().Token.Kind);
+        Assert.Equal("a", map[0].Value.AsElement().GetString());
+    }
+
+    [Fact]
+    public void KeysOfDifferentTypesShareOneMap()
+    {
+        using var document = YamlDocument.Parse(
+            "1: a\ntrue: b\nnull: c\n1.5: d\n2001-12-14: e\n\"2\": f\ng: h\n"
+        );
+
+        var kinds = document.RootElement.AsMap().Select(pair => pair.Key.AsElement().Token.Kind);
+
+        Assert.Equal(
+            new[]
+            {
+                DTokenKind.Integer,
+                DTokenKind.Boolean,
+                DTokenKind.Null,
+                DTokenKind.Float,
+                DTokenKind.Timestamp,
+                DTokenKind.String,
+                DTokenKind.String,
+            },
+            kinds
+        );
+    }
+
+    // A key keeps the form it was written in, and a string that looks like another type is quoted, so the type of
+    // every key survives writing and reading again.
+    [Theory]
+    [InlineData("1: a\ntrue: b\n2001-12-14: c\n1.5: d\n")]
+    [InlineData("\"1\": a\n\"true\": b\n\"2001-12-14\": c\n\"1.5\": d\n")]
+    [InlineData("1: a\n\"1\": b\n")]
+    [InlineData("null: a\ntext: b\n")]
+    public void KeyTypesSurviveWritingAndReading(string yaml)
+    {
+        using var document = YamlDocument.Parse(yaml);
+
+        var written = YamlDocument.EncodeToString(
+            document.RootElement,
+            new YamlWriteOptions { NewLine = "\n" }
+        );
+
+        Assert.Equal(yaml, written);
+    }
+
+    [Fact]
+    public void MapWithKeysOfOtherTypesIsWrittenAndReadBack()
+    {
+        var map = new DMap();
+        map.Add(DValue.Create(1), DValue.Create("integer"));
+        map.Add(DValue.Create(true), DValue.Create("boolean"));
+        map.Add(DValue.Create("1"), DValue.Create("string that looks like an integer"));
+        map.Add(DValue.Create(2.5), DValue.Create("float"));
+
+        var yaml = YamlDocument.EncodeToString(
+            map.AsElement(),
+            new YamlWriteOptions { NewLine = "\n" }
+        );
+
+        Assert.Equal(
+            "1: integer\ntrue: boolean\n\"1\": string that looks like an integer\n2.5: float\n",
+            yaml
+        );
+        using var parsed = YamlDocument.Parse(yaml);
+        Assert.Equal(
+            new[] { DTokenKind.Integer, DTokenKind.Boolean, DTokenKind.String, DTokenKind.Float },
+            parsed.RootElement.AsMap().Select(pair => pair.Key.AsElement().Token.Kind)
+        );
+    }
+
+    // The integer 1 and the string "1" are two keys; the integer 1 twice is a repeated key.
+    [Fact]
+    public void ValidationComparesKeysWithTheirTypes()
+    {
+        var validating = new YamlDocumentOptions { EnableValueValidation = true };
+
+        using var different = YamlDocument.Parse("1: a\n\"1\": b\n", options: validating);
+        Assert.Equal(2, different.RootElement.AsMap().Count);
+
+        Assert.ThrowsAny<DocumentParseException>(() =>
+            YamlDocument.Parse("1: a\n1: b\n", options: validating)
+        );
+    }
+
+    // "? key" is the same entry as "key: value"; the value is optional and may start on the line of the ":".
+    [Theory]
+    [InlineData("? a\n: b\n", "{\"a\":\"b\"}")]
+    [InlineData("? a\n", "{\"a\":null}")]
+    [InlineData("? a\n? b\nc:\n", "{\"a\":null,\"b\":null,\"c\":null}")]
+    [InlineData("? a\n:\n", "{\"a\":null}")]
+    [InlineData("? a\n:\n  b\n", "{\"a\":\"b\"}")]
+    [InlineData("? a\n: - b\n  - c\n", "{\"a\":[\"b\",\"c\"]}")]
+    [InlineData("? a\n: b: c\n", "{\"a\":{\"b\":\"c\"}}")]
+    [InlineData("? a  # note\n# between\n: b\n", "{\"a\":\"b\"}")]
+    [InlineData("? \"quoted key\"\n: b\n", "{\"quoted key\":\"b\"}")]
+    [InlineData("? |\n  block key\n: b\n", "{\"block key\\n\":\"b\"}")]
+    [InlineData("? a\n  continued\n: b\n", "{\"a continued\":\"b\"}")]
+    [InlineData("a: 1\n? b\n: 2\nc: 3\n", "{\"a\":1,\"b\":2,\"c\":3}")]
+    [InlineData("m:\n  ? a\n  : 1\n  b: 2\n", "{\"m\":{\"a\":1,\"b\":2}}")]
+    [InlineData("- ? a\n  : 1\n- ? b\n", "[{\"a\":1},{\"b\":null}]")]
+    [InlineData("[? a : b]", "[{\"a\":\"b\"}]")]
+    [InlineData("[\n? foo\n bar : baz\n]", "[{\"foo bar\":\"baz\"}]")]
+    [InlineData("{? a : b, ? c}", "{\"a\":\"b\",\"c\":null}")]
+    [InlineData("?\n: b\n", "{\"null\":\"b\"}")]
+    public void ExplicitKeyReadsLikeAnImplicitOne(string yaml, string expectedJson)
+    {
+        using var document = YamlDocument.Parse(yaml);
+        using var expected = REDox.Json.JsonDocument.Parse(expectedJson);
+
+        // JSON keys are strings, so the keys of the YAML map are compared as the text they are written with.
+        Assert.Equal(
+            REDox.Json.JsonDocument.EncodeToString(expected.RootElement),
+            JsonWithKeysAsText(document.RootElement)
+        );
+    }
+
+    private static string JsonWithKeysAsText(DElement element)
+    {
+        return element.Token.Type switch
+        {
+            DTokenType.Map => "{"
+                + string.Join(
+                    ",",
+                    element
+                        .AsMap()
+                        .Select(pair =>
+                            System.Text.Json.JsonSerializer.Serialize(KeyText(pair.Key.AsElement()))
+                            + ":"
+                            + JsonWithKeysAsText(pair.Value.AsElement())
+                        )
+                )
+                + "}",
+            DTokenType.Array => "["
+                + string.Join(
+                    ",",
+                    element.AsArray().Select(item => JsonWithKeysAsText(item.AsElement()))
+                )
+                + "]",
+            _ => REDox.Json.JsonDocument.EncodeToString(element),
+        };
+    }
+
+    private static string KeyText(DElement key)
+    {
+        if (key.Token.Kind == DTokenKind.Null)
+            return "null";
+
+        if (key.Token.Kind != DTokenKind.String)
+            return REDox.Json.JsonDocument.EncodeToString(key);
+
+        var text = key.GetString();
+        Debug.Assert(text != null); // GetString returns null only for a null token, which is handled above.
+        return text;
     }
 
     [Theory]

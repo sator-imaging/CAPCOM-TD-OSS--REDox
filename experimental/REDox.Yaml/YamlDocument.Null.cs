@@ -10,12 +10,17 @@ public sealed partial class YamlDocument
     private uint ParseNull() => AllocToken(DToken.Make(DTokenVariant.Null, 0));
 
     internal static bool IsNullText(string text) =>
-        text.Length == 0 || text is "null" or "Null" or "NULL" or "~";
+        text.Length == 0 || YamlSyntax.NullWords.Contains(text);
 
-    private bool TryParseNull(string text, out uint tokenId)
+    private static bool IsNullText(ReadOnlySpan<byte> text) =>
+        text.IsEmpty || YamlSyntax.IsOneOf(text, YamlSyntax.NullWordsUtf8);
+
+    // A null needs no text of its own, so the bytes of the scalar are dropped.
+    private bool TryParseNull(ParsedScalar scalar, out uint tokenId)
     {
-        if (IsNullText(text))
+        if (IsNullText(ScalarText(scalar)))
         {
+            DiscardScalar(scalar);
             tokenId = ParseNull();
             return true;
         }

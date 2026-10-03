@@ -7,23 +7,23 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
-    private enum ParseErrorCode
+    private DocumentParseException Error(ParseException.ErrorCode code)
     {
-        InvalidFormat,
-        InvalidString,
-        MaxDepthExceeded,
-        UnsupportedFeature,
-    }
-
-    private DocumentParseException Error(ParseErrorCode code)
-    {
-        var position = System.Text.Encoding.UTF8.GetByteCount(_text.AsSpan(0, _position));
-        return new ParseException(position, code);
+        // The position is a byte offset in the UTF-8 text, which is what the exception reports.
+        return new ParseException(_position, code);
     }
 
     private sealed class ParseException : DocumentParseException
     {
-        public ParseException(int position, ParseErrorCode code)
+        public enum ErrorCode
+        {
+            InvalidFormat,
+            InvalidString,
+            MaxDepthExceeded,
+            UnsupportedFeature,
+        }
+
+        public ParseException(int position, ErrorCode code)
             : base(nameof(YamlDocument), position, code.ToString()) { }
     }
 }

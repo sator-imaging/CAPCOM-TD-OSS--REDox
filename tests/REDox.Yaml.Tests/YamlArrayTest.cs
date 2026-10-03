@@ -48,6 +48,27 @@ public sealed class YamlArrayTest
         );
     }
 
+    // The block and flow shapes of an array, each checked against the value it must stand for.
+    [Theory]
+    [InlineData("- a: 1\n  b: 2\n- c: 3\n", "[{\"a\":1,\"b\":2},{\"c\":3}]")]
+    [InlineData("-\n  a: 1\n  b: 2\n", "[{\"a\":1,\"b\":2}]")]
+    [InlineData("- - 1\n  - 2\n- - 3\n", "[[1,2],[3]]")]
+    [InlineData("- - - 1\n", "[[[1]]]")]
+    [InlineData("-\n  - 1\n", "[[1]]")]
+    [InlineData("-\n- 1\n", "[null,1]")]
+    [InlineData("- 'single'\n- \"double\"\n- plain\n", "[\"single\",\"double\",\"plain\"]")]
+    [InlineData("- a:\n    - 1\n    - 2\n", "[{\"a\":[1,2]}]")]
+    [InlineData("[1, 2, ]", "[1,2]")]
+    [InlineData("[a, 'b', \"c\"]", "[\"a\",\"b\",\"c\"]")]
+    [InlineData("[[1], {a: 2}]", "[[1],{\"a\":2}]")]
+    [InlineData("[1,\n 2,\n [3,\n  4]]", "[1,2,[3,4]]")]
+    [InlineData("[\n  1,\n  2,\n]\n", "[1,2]")]
+    [InlineData("- [1,\n  2]\n- [3]\n", "[[1,2],[3]]")]
+    public void ArrayShapes(string yaml, string expectedJson)
+    {
+        YamlTestHelper.ParsesAs(yaml, expectedJson);
+    }
+
     [Theory]
     [InlineData("- [1, 2]\n- []\n")]
     public void ParseNestedArray(string yaml)

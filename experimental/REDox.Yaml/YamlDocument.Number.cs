@@ -11,63 +11,107 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
+    // Reads a hexadecimal ("0x1F") or octal ("0o14") integer of the core schema. A text without digits, with a digit
+    // outside the base, or too large for 64 bits is not one.
+    private static bool TryParsePrefixedInteger(ReadOnlySpan<byte> text, out ulong value)
+    {
+        value = 0;
+
+        int radix;
+        ReadOnlySpan<byte> digits;
+        if (text.StartsWith(YamlSyntax.HexPrefixUtf8))
+        {
+            radix = 16;
+            digits = text[YamlSyntax.HexPrefixUtf8.Length..];
+        }
+        else if (text.StartsWith(YamlSyntax.OctalPrefixUtf8))
+        {
+            radix = 8;
+            digits = text[YamlSyntax.OctalPrefixUtf8.Length..];
+        }
+        else
+        {
+            return false;
+        }
+
+        if (digits.IsEmpty)
+            return false;
+
+        foreach (var character in digits)
+        {
+            int digit;
+            if (char.IsAsciiDigit((char)character))
+                digit = character - YamlSyntax.DigitZero;
+            else if (char.IsAsciiHexDigit((char)character))
+                digit = char.ToLowerInvariant((char)character) - 'a' + 10;
+            else
+                return false;
+
+            if (digit >= radix || value > (ulong.MaxValue - (ulong)digit) / (ulong)radix)
+                return false;
+
+            value = value * (ulong)radix + (ulong)digit;
+        }
+
+        return true;
+    }
+
     // The single source of truth for "does this plain text read as a number", shared by parsing and by
     // YamlStringHelper (which must quote strings that would otherwise be read back as numbers).
     internal static bool TryGetNumberVariant(string text, out DTokenVariant variant)
     {
+        return TryGetNumberVariant(System.Text.Encoding.UTF8.GetBytes(text), out variant);
+    }
+
+    internal static bool TryGetNumberVariant(ReadOnlySpan<byte> text, out DTokenVariant variant)
+    {
         variant = default;
-        if (text.Length == 0)
+        if (text.IsEmpty)
             return false;
 
-        if (
-            text
-            is ".inf"
-                or ".Inf"
-                or ".INF"
-                or "+.inf"
-                or "+.Inf"
-                or "+.INF"
-                or "-.inf"
-                or "-.Inf"
-                or "-.INF"
-                or ".nan"
-                or ".NaN"
-                or ".NAN"
-        )
+        if (YamlSyntax.IsOneOf(text, YamlSyntax.SpecialFloatWordsUtf8))
         {
             variant = DTokenVariant.Float;
             return true;
         }
 
-        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        if (TryParsePrefixedInteger(text, out var prefixed))
+        {
+            variant =
+                prefixed <= long.MaxValue ? DTokenVariant.Integer : DTokenVariant.IntegerUnsigned;
+            return true;
+        }
+
         if (
-            Utf8Parser.TryParse(bytes, out long integer, out var consumed)
-            && consumed == bytes.Length
+            Utf8Parser.TryParse(text, out long integer, out var consumed)
+            && consumed == text.Length
         )
         {
             variant = DTokenVariant.Integer;
             return true;
         }
 
-        if (
-            Utf8Parser.TryParse(bytes, out ulong unsigned, out consumed)
-            && consumed == bytes.Length
-        )
+        if (Utf8Parser.TryParse(text, out ulong unsigned, out consumed) && consumed == text.Length)
         {
             variant = DTokenVariant.IntegerUnsigned;
             return true;
         }
 
-        if (BigInteger.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+        // Only an integer that does not fit 64 bits gets here, so the string for BigInteger is rarely made.
+        if (
+            BigInteger.TryParse(
+                System.Text.Encoding.UTF8.GetString(text),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out _
+            )
+        )
         {
             variant = DTokenVariant.BigNumberInteger;
             return true;
         }
 
-        if (
-            Utf8Parser.TryParse(bytes, out double floating, out consumed)
-            && consumed == bytes.Length
-        )
+        if (Utf8Parser.TryParse(text, out double floating, out consumed) && consumed == text.Length)
         {
             variant = DTokenVariant.Float;
             return true;
@@ -75,7 +119,7 @@ public sealed partial class YamlDocument
 
         if (
             double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
-            && text.IndexOfAny('e', 'E') >= 0
+            && text.ContainsAny(YamlSyntax.Exponent)
         )
         {
             variant = DTokenVariant.BigNumberFloat;
@@ -85,13 +129,13 @@ public sealed partial class YamlDocument
         return false;
     }
 
-    private bool TryParseNumber(string text, out uint tokenId)
+    private bool TryParseNumber(ParsedScalar scalar, out uint tokenId)
     {
         tokenId = 0;
-        if (!TryGetNumberVariant(text, out var variant))
+        if (!TryGetNumberVariant(ScalarText(scalar), out var variant))
             return false;
 
-        tokenId = StoreScalar(variant, text);
+        tokenId = CommitScalar(variant, scalar);
         return true;
     }
 
@@ -114,6 +158,11 @@ public sealed partial class YamlDocument
             return unchecked((long)unsigned);
         }
 
+        if (TryParsePrefixedInteger(bytes, out var prefixed))
+        {
+            return unchecked((long)prefixed);
+        }
+
         throw new InvalidCastException();
     }
 
@@ -121,13 +170,13 @@ public sealed partial class YamlDocument
     {
         var text = System.Text.Encoding.UTF8.GetString(ScalarBytes(token));
         if (
-            text.StartsWith("-.", StringComparison.Ordinal)
-            && text.EndsWith("inf", StringComparison.OrdinalIgnoreCase)
+            text.StartsWith(YamlSyntax.NegativeInfinityPrefix, StringComparison.Ordinal)
+            && text.EndsWith(YamlSyntax.InfinitySuffix, StringComparison.OrdinalIgnoreCase)
         )
             return double.NegativeInfinity;
-        if (text.EndsWith(".inf", StringComparison.OrdinalIgnoreCase))
+        if (text.EndsWith(YamlSyntax.PositiveInfinitySuffix, StringComparison.OrdinalIgnoreCase))
             return double.PositiveInfinity;
-        if (text.EndsWith(".nan", StringComparison.OrdinalIgnoreCase))
+        if (text.EndsWith(YamlSyntax.NotANumberSuffix, StringComparison.OrdinalIgnoreCase))
             return double.NaN;
         return double.Parse(text, System.Globalization.CultureInfo.InvariantCulture);
     }
@@ -164,14 +213,13 @@ public sealed partial class YamlDocument
 
             var value = reader.ReadDouble(tokenId);
             if (double.IsPositiveInfinity(value))
-                writer.WriteString(".inf"u8);
+                writer.WriteString(YamlSyntax.InfinityUtf8);
             else if (double.IsNegativeInfinity(value))
-                writer.WriteString("-.inf"u8);
+                writer.WriteString(YamlSyntax.NegativeInfinityUtf8);
             else if (double.IsNaN(value))
-                writer.WriteString(".nan"u8);
-            // YAML resolves -0 as an integer, so include a decimal point to preserve floating negative zero.
+                writer.WriteString(YamlSyntax.NotANumberUtf8);
             else if (value == 0 && BitConverter.DoubleToInt64Bits(value) < 0)
-                writer.WriteString("-0.0"u8);
+                writer.WriteString(YamlSyntax.NegativeZeroUtf8);
             else
                 writer.WriteDouble(value);
         }
