@@ -1,5 +1,4 @@
-using System;
-using REDox;
+﻿using System;
 
 namespace REDox.Yaml.Tests;
 
@@ -18,7 +17,9 @@ public sealed partial class YamlTimestampTest
         );
 
         Assert.Equal("12:30:00\n", yaml);
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(DTokenKind.String, parsed.RootElement.Token.Kind);
         Assert.Equal("12:30:00", parsed.RootElement.GetString());
     }

@@ -1,6 +1,4 @@
-using System;
-using REDox;
-using REDox.Cbor;
+﻿using REDox.Cbor;
 using REDox.MessagePack;
 
 namespace REDox.Yaml.Tests;
@@ -33,7 +31,9 @@ public sealed partial class YamlFormatConversionTest
         var yaml = YamlDocument.EncodeToString(document.RootElement, LineFeedOptions);
 
         Assert.Equal("AQID\n", yaml);
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(DTokenKind.String, parsed.RootElement.Token.Kind);
     }
 
@@ -45,7 +45,9 @@ public sealed partial class YamlFormatConversionTest
         var yaml = YamlDocument.EncodeToString(document.RootElement, LineFeedOptions);
 
         Assert.Equal("AQID\n", yaml);
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(DTokenKind.String, parsed.RootElement.Token.Kind);
     }
 
@@ -59,6 +61,7 @@ public sealed partial class YamlFormatConversionTest
             "- 1\n- AQID\n",
             YamlDocument.EncodeToString(cbor.RootElement, LineFeedOptions)
         );
+
         Assert.Equal(
             "- 1\n- AQID\n",
             YamlDocument.EncodeToString(messagePack.RootElement, LineFeedOptions)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace REDox.Yaml.Tests;
 
@@ -15,6 +15,7 @@ public sealed partial class YamlTimestampTest
     public void PlainTimestampsAreTimestamps(string text, DTokenVariant variant)
     {
         using var document = YamlDocument.Parse(text);
+
         Assert.Equal(DTokenKind.Timestamp, document.RootElement.Token.Kind);
         Assert.Equal(variant, document.RootElement.Token.Variant);
     }
@@ -33,6 +34,7 @@ public sealed partial class YamlTimestampTest
     public void OtherTextsStayStrings(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(DTokenKind.String, document.RootElement.Token.Kind);
     }
 
@@ -51,7 +53,9 @@ public sealed partial class YamlTimestampTest
         );
 
         Assert.Equal(plain, !yaml.StartsWith('"'));
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
@@ -123,6 +127,7 @@ public sealed partial class YamlTimestampTest
             "Tokyo",
             "Tokyo"
         );
+
         var options = new YamlDocumentOptions { AssumedTimeZone = tokyo };
 
         using var document = YamlDocument.Parse(
@@ -134,10 +139,12 @@ public sealed partial class YamlTimestampTest
             TimeSpan.FromHours(9),
             document.RootElement.GetProperty("local").GetDateTimeOffset().Offset
         );
+
         Assert.Equal(
             TimeSpan.Zero,
             document.RootElement.GetProperty("explicit").GetDateTimeOffset().Offset
         );
+
         Assert.Equal(
             TimeSpan.FromHours(9),
             document.RootElement.GetProperty("date").GetDateTimeOffset().Offset
@@ -148,6 +155,7 @@ public sealed partial class YamlTimestampTest
             document.RootElement,
             new YamlWriteOptions { NewLine = "\n" }
         );
+
         Assert.Equal(
             "local: 2001-12-14 21:59:43\nexplicit: 2001-12-14 21:59:43Z\ndate: 2001-12-14\n",
             encoded
@@ -162,6 +170,7 @@ public sealed partial class YamlTimestampTest
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(DTokenKind.Timestamp, parsed.RootElement.Token.Kind);
         Assert.Equal(value, parsed.RootElement.GetDateTimeOffset());
     }

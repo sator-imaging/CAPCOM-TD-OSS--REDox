@@ -1,5 +1,4 @@
-using System.Linq;
-using REDox;
+﻿using System.Linq;
 
 namespace REDox.Yaml.Tests;
 
@@ -29,6 +28,7 @@ public sealed partial class YamlOptionsTest
             yaml,
             options: new YamlDocumentOptions { ReadMapKeyAsString = true }
         );
+
         var map =
             document.RootElement.Token.Type == DTokenType.Array
                 ? document.RootElement.AsArray()[0].AsElement().AsMap()
@@ -64,7 +64,6 @@ public sealed partial class YamlOptionsTest
         );
     }
 
-    // The values are not touched: only the keys are read as strings.
     [Fact]
     public void ReadMapKeyAsStringLeavesTheValuesAlone()
     {
@@ -78,7 +77,6 @@ public sealed partial class YamlOptionsTest
         Assert.Equal(new[] { DTokenKind.Integer, DTokenKind.Boolean, DTokenKind.Null }, kinds);
     }
 
-    // A key with no text has no string to read.
     [Theory]
     [InlineData("?\n: a\n")]
     [InlineData("? a\n? \n: b\n")]
@@ -93,6 +91,7 @@ public sealed partial class YamlOptionsTest
 
         // Without the option the same text has a null key.
         using var document = YamlDocument.Parse(yaml);
+
         Assert.True(document.RootElement.IsValid);
     }
 }

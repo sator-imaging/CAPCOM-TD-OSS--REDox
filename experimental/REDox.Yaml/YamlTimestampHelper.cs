@@ -19,10 +19,12 @@ internal static class YamlTimestampHelper
         if (TryParse(text, out var parts))
         {
             kind = parts.Kind;
+
             return true;
         }
 
         kind = default;
+
         return false;
     }
 
@@ -37,6 +39,7 @@ internal static class YamlTimestampHelper
     {
         var parts = ParseOrThrow(text);
         var offset = parts.Offset ?? unspecifiedOffsetTimeZone.GetUtcOffset(parts.WallClock);
+
         return new DateTimeOffset(parts.WallClock, offset);
     }
 
@@ -88,6 +91,7 @@ internal static class YamlTimestampHelper
         if (!match.Groups[4].Success)
         {
             parts = new Parts(wallClock, null, TimestampKind.LocalDate);
+
             return true;
         }
 
@@ -112,6 +116,7 @@ internal static class YamlTimestampHelper
         if (!match.Groups[8].Success)
         {
             parts = new Parts(wallClock, null, TimestampKind.LocalDateTime);
+
             return true;
         }
 
@@ -121,13 +126,15 @@ internal static class YamlTimestampHelper
         }
 
         parts = new Parts(wallClock, offset, TimestampKind.OffsetDateTime);
+
         return true;
     }
 
     private static bool TryParseOffset(string zone, out TimeSpan offset)
     {
         offset = TimeSpan.Zero;
-        if (zone == YamlSyntax.UtcDesignator)
+
+        if (zone.Length == 1 && zone[0] == YamlSyntax.UtcDesignator)
         {
             return true;
         }
@@ -143,6 +150,7 @@ internal static class YamlTimestampHelper
         }
 
         offset = new TimeSpan(hours, minutes, 0);
+
         if (zone[0] == YamlSyntax.Dash)
         {
             offset = -offset;

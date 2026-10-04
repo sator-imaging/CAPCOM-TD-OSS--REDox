@@ -1,9 +1,8 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
 using System.Buffers;
-using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -14,14 +13,6 @@ namespace REDox.Yaml;
 
 internal static partial class YamlSyntax
 {
-    // How the characters below are named. A character that has one role in YAML is named after that role
-    // (CommentIndicator, FlowSequenceStart). A character that serves several roles is named after the character itself:
-    // "-" starts a sequence entry, strips a block scalar and is a minus sign. Code points are written as numbers where
-    // the character itself would be invisible or confusing in the source.
-    //
-    // The parser reads UTF-8 bytes, so every ASCII character is a byte. The characters that are not ASCII (further
-    // below) are chars: they are code points, which the parser writes as UTF-8 and the writer checks in strings.
-    //
     // White space and line breaks. YAML knows no other white space: U+3000 and the like are ordinary text.
     public const byte Space = (byte)' ';
     public const byte Tab = (byte)'\t';
@@ -83,6 +74,40 @@ internal static partial class YamlSyntax
     public const byte DigitOne = (byte)'1';
     public const byte DigitNine = (byte)'9';
 
+    public const byte HexDigitUpperFirst = (byte)'A';
+    public const byte HexDigitUpperLast = (byte)'F';
+    public const byte HexDigitLowerFirst = (byte)'a';
+    public const byte HexDigitLowerLast = (byte)'f';
+
+    public const int HexLetterDigitValue = 10;
+
+    public static readonly SearchValues<byte> HexDigits = SearchValues.Create(
+        "0123456789abcdefABCDEF"u8
+    );
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsAsciiDigit(byte value) => value is >= DigitZero and <= DigitNine;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsAsciiHexDigit(byte value) => HexDigits.Contains(value);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsIndentDigit(byte value) => value is >= DigitOne and <= DigitNine;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsC1Control(int value) =>
+        value is >= C1ControlFirstSecondByte and <= C1ControlLastSecondByte;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsNonPrintableCodePoint(int value) =>
+        IsC1Control(value)
+        || value
+            is LineSeparator
+                or ParagraphSeparator
+                or ByteOrderMark
+                or NonCharacterFffe
+                or NonCharacterFfff;
+
     // Characters an escape sequence produces
     public const byte Bell = (byte)'\a';
     public const byte Backspace = (byte)'\b';
@@ -128,8 +153,9 @@ internal static partial class YamlSyntax
     }
 
     // The prefixes of the hexadecimal and octal integers of the YAML 1.2 core schema ("0x1F", "0o14") and of the binary
-    // integers of YAML 1.1 ("0b101"). The other YAML 1.1 forms are not numbers here: "0755" is the decimal 755, not an
-    // octal, and "190:20:30" is a string. The underscores that YAML 1.1 allows between digits ("1_000") are read.
+    // integers of YAML 1.1 ("0b101").
+    // The other YAML 1.1 forms are not numbers here: "0755" is the decimal 755, not an octal,
+    // and "190:20:30" is a string. The underscores that YAML 1.1 allows between digits ("1_000") are read.
     public static ReadOnlySpan<byte> BinaryPrefixUtf8 => "0b"u8;
 
     public static ReadOnlySpan<byte> HexPrefixUtf8 => "0x"u8;
@@ -137,133 +163,132 @@ internal static partial class YamlSyntax
     public static ReadOnlySpan<byte> OctalPrefixUtf8 => "0o"u8;
 
     // The designator of the UTC time zone at the end of a timestamp ("2001-12-14T21:59:43Z")
-    public const string UtcDesignator = "Z";
+    public const byte UtcDesignator = (byte)'Z';
 
     // A text that is a single dash: the sequence entry indicator, which cannot be a plain scalar
-    public const string DashText = "-";
+    public static ReadOnlySpan<byte> DashTextUtf8 => "-"u8;
 
     // Document markers
-    public const string DocumentStart = "---";
-    public const string DocumentEnd = "...";
-
     public static ReadOnlySpan<byte> DocumentStartUtf8 => "---"u8;
 
     public static ReadOnlySpan<byte> DocumentEndUtf8 => "..."u8;
 
-    // The words a plain scalar is read as null, true or false (YAML 1.2 core schema).
-    private static readonly string[] NullWordList = new string[] { "null", "Null", "NULL", "~" };
-
-    public static readonly FrozenSet<string> NullWords = NullWordList.ToFrozenSet();
-
-    private static readonly string[] TrueWordList = new string[] { "true", "True", "TRUE" };
-
-    public static readonly FrozenSet<string> TrueWords = TrueWordList.ToFrozenSet();
-
-    private static readonly string[] FalseWordList = new string[] { "false", "False", "FALSE" };
-
-    public static readonly FrozenSet<string> FalseWords = FalseWordList.ToFrozenSet();
-
-    // Infinity and not-a-number as the core schema spells them.
-    private static readonly string[] SpecialFloatWordList = new string[]
+    // Plain scalars use the YAML 1.1 boolean spellings.
+    // YAML 1.1 booleans include y/n, yes/no and on/off: https://yaml.org/type/bool.html
+    // Keep its exact spellings here, shared by scalar reading and string quoting; arbitrary mixed case is a string.
+    public static bool TryParseBooleanScalar(ReadOnlySpan<byte> text, out bool value)
     {
-        ".inf",
-        ".Inf",
-        ".INF",
-        "+.inf",
-        "+.Inf",
-        "+.INF",
-        "-.inf",
-        "-.Inf",
-        "-.INF",
-        ".nan",
-        ".NaN",
-        ".NAN",
-    };
-
-    // The same words as UTF-8, for the parser, which compares bytes. They are made from the lists above, so the two
-    // forms cannot differ. (The special floats are only read, so they only have this form.)
-    public static readonly byte[][] NullWordsUtf8 = ToUtf8(NullWordList);
-
-    public static readonly byte[][] TrueWordsUtf8 = ToUtf8(TrueWordList);
-
-    public static readonly byte[][] FalseWordsUtf8 = ToUtf8(FalseWordList);
-
-    public static readonly byte[][] SpecialFloatWordsUtf8 = ToUtf8(SpecialFloatWordList);
-
-    private static byte[][] ToUtf8(string[] words)
-    {
-        return Array.ConvertAll(words, word => Encoding.UTF8.GetBytes(word));
-    }
-
-    // Whether the bytes are one of the words.
-    public static bool IsOneOf(ReadOnlySpan<byte> text, byte[][] words)
-    {
-        foreach (var word in words)
+        if (text.IsEmpty || (text[0] | 0x20) is not ('t' or 'y' or 'o' or 'f' or 'n'))
         {
-            if (text.SequenceEqual(word))
-                return true;
+            value = default;
+
+            return false;
         }
 
-        return false;
+        value =
+            text.SequenceEqual("true"u8)
+            || text.SequenceEqual("True"u8)
+            || text.SequenceEqual("TRUE"u8)
+            || text.SequenceEqual("y"u8)
+            || text.SequenceEqual("Y"u8)
+            || text.SequenceEqual("yes"u8)
+            || text.SequenceEqual("Yes"u8)
+            || text.SequenceEqual("YES"u8)
+            || text.SequenceEqual("on"u8)
+            || text.SequenceEqual("On"u8)
+            || text.SequenceEqual("ON"u8);
+
+        return value
+            || text.SequenceEqual("false"u8)
+            || text.SequenceEqual("False"u8)
+            || text.SequenceEqual("FALSE"u8)
+            || text.SequenceEqual("n"u8)
+            || text.SequenceEqual("N"u8)
+            || text.SequenceEqual("no"u8)
+            || text.SequenceEqual("No"u8)
+            || text.SequenceEqual("NO"u8)
+            || text.SequenceEqual("off"u8)
+            || text.SequenceEqual("Off"u8)
+            || text.SequenceEqual("OFF"u8);
+    }
+
+    public static bool IsNullScalar(ReadOnlySpan<byte> text) =>
+        text.IsEmpty
+        || text.SequenceEqual("null"u8)
+        || text.SequenceEqual("Null"u8)
+        || text.SequenceEqual("NULL"u8)
+        || text.SequenceEqual("~"u8);
+
+    public static bool IsSpecialFloatScalar(ReadOnlySpan<byte> text)
+    {
+        return text.Length switch
+        {
+            4 => text[0] is Dot
+                && (
+                    text.SequenceEqual(".inf"u8)
+                    || text.SequenceEqual(".Inf"u8)
+                    || text.SequenceEqual(".INF"u8)
+                    || text.SequenceEqual(".nan"u8)
+                    || text.SequenceEqual(".NaN"u8)
+                    || text.SequenceEqual(".NAN"u8)
+                ),
+            5 => text[0] is Plus or Dash
+                && (
+                    text[1..].SequenceEqual(".inf"u8)
+                    || text[1..].SequenceEqual(".Inf"u8)
+                    || text[1..].SequenceEqual(".INF"u8)
+                ),
+            _ => false,
+        };
     }
 
     // Used to tell the sign and the kind of a special float apart (compared ignoring case).
-    public const string NegativeInfinityPrefix = "-.";
-    public const string InfinitySuffix = "inf";
-    public const string PositiveInfinitySuffix = ".inf";
-    public const string NotANumberSuffix = ".nan";
+    public static ReadOnlySpan<byte> NegativeInfinityPrefixUtf8 => "-."u8;
+    public static ReadOnlySpan<byte> InfinitySuffixUtf8 => "inf"u8;
+    public static ReadOnlySpan<byte> PositiveInfinitySuffixUtf8 => ".inf"u8;
+    public static ReadOnlySpan<byte> NotANumberSuffixUtf8 => ".nan"u8;
 
-    // Words that only YAML 1.1 parsers read as something other than a string (booleans, and the merge and value
-    // keys). This library reads them as strings, but a string equal to one is quoted so that it survives them.
-    private static readonly string[] Yaml11WordList = new string[]
-    {
-        "y",
-        "n",
-        "yes",
-        "no",
-        "on",
-        "off",
-        "=",
-        "<<",
-    };
+    // Quote YAML 1.1 reserved words conservatively
+    // Including mixed-case boolean words and the merge and value keys.
+    // Boolean resolution accepts only the exact spellings above, merge and value keys remain strings here.
+    // YAML 1.1 reserved words are ASCII; compare their UTF-8 directly without decoding each candidate string.
+    public static bool IsYaml11ReservedWord(ReadOnlySpan<byte> text) =>
+        text.Length switch
+        {
+            1 => Ascii.EqualsIgnoreCase(text, "y"u8)
+                || Ascii.EqualsIgnoreCase(text, "n"u8)
+                || text.SequenceEqual("="u8),
+            2 => Ascii.EqualsIgnoreCase(text, "no"u8)
+                || Ascii.EqualsIgnoreCase(text, "on"u8)
+                || text.SequenceEqual("<<"u8),
+            3 => Ascii.EqualsIgnoreCase(text, "yes"u8) || Ascii.EqualsIgnoreCase(text, "off"u8),
+            _ => false,
+        };
 
-    public static readonly FrozenSet<string> Yaml11Words = Yaml11WordList.ToFrozenSet(
-        StringComparer.OrdinalIgnoreCase
-    );
-
-    // Text the writer emits as it is, as UTF-8. A literal is the only allocation-free way to hold it.
     public static ReadOnlySpan<byte> EmptySequenceUtf8 => "[]"u8;
-
     public static ReadOnlySpan<byte> EmptyMappingUtf8 => "{}"u8;
-
     public static ReadOnlySpan<byte> InfinityUtf8 => ".inf"u8;
-
     public static ReadOnlySpan<byte> NegativeInfinityUtf8 => "-.inf"u8;
-
     public static ReadOnlySpan<byte> NotANumberUtf8 => ".nan"u8;
 
     // YAML resolves -0 as an integer, so a floating negative zero is written with a decimal point.
     public static ReadOnlySpan<byte> NegativeZeroUtf8 => "-0.0"u8;
 
-    // White space as YAML defines it, for Trim.
     public static ReadOnlySpan<byte> WhiteSpace => " \t"u8;
 
-    // The only characters that can end a plain scalar: a line break, the "#" of a comment, the ":" of a key and, in
-    // a flow collection, its indicators. Whether one of them really ends the scalar depends on its neighbours.
-    private static readonly byte[] PlainBlockStopCharacters = new byte[]
-    {
+    // The only characters that can end a plain scalar
+    //   - line break
+    //   - "#" of a comment
+    //   - ":" of a key and, in a flow collection, its indicators.
+    // Whether one of them really ends the scalar depends on its neighbours.
+    public static readonly SearchValues<byte> PlainBlockStops = SearchValues.Create([
         CarriageReturn,
         LineFeed,
         CommentIndicator,
         MappingValueIndicator,
-    };
+    ]);
 
-    public static readonly SearchValues<byte> PlainBlockStops = SearchValues.Create(
-        PlainBlockStopCharacters
-    );
-
-    private static readonly byte[] PlainFlowStopCharacters = new byte[]
-    {
+    public static readonly SearchValues<byte> PlainFlowStops = SearchValues.Create([
         CarriageReturn,
         LineFeed,
         CommentIndicator,
@@ -273,15 +298,10 @@ internal static partial class YamlSyntax
         FlowSequenceEnd,
         FlowMappingStart,
         FlowMappingEnd,
-    };
+    ]);
 
-    public static readonly SearchValues<byte> PlainFlowStops = SearchValues.Create(
-        PlainFlowStopCharacters
-    );
-
-    // A plain scalar must not start with one of these. The writer checks strings, so it uses the set of chars.
-    private static readonly byte[] IndicatorStartCharacters = new byte[]
-    {
+    // A plain scalar must not start with one of these. The writer checks the UTF-8 bytes directly.
+    public static readonly SearchValues<byte> IndicatorStarts = SearchValues.Create([
         Dash,
         ExplicitKeyIndicator,
         MappingValueIndicator,
@@ -301,14 +321,9 @@ internal static partial class YamlSyntax
         DirectiveIndicator,
         ReservedAtIndicator,
         ReservedBacktickIndicator,
-    };
+    ]);
 
-    public static readonly SearchValues<char> IndicatorStarts = SearchValues.Create(
-        ToChars(IndicatorStartCharacters)
-    );
-
-    private static readonly byte[] DashDigitDotCharacters = new byte[]
-    {
+    public static readonly SearchValues<byte> DashDigitDot = SearchValues.Create([
         Dash,
         Dot,
         (byte)'0',
@@ -321,52 +336,96 @@ internal static partial class YamlSyntax
         (byte)'7',
         (byte)'8',
         (byte)'9',
-    };
+    ]);
 
-    public static readonly SearchValues<char> DashDigitDot = SearchValues.Create(
-        ToChars(DashDigitDotCharacters)
-    );
-
-    private static readonly byte[] ExponentCharacters = new byte[] { ExponentLower, ExponentUpper };
+    private static readonly byte[] ExponentCharacters = [ExponentLower, ExponentUpper];
 
     public static readonly SearchValues<byte> Exponent = SearchValues.Create(ExponentCharacters);
-
-    private static char[] ToChars(byte[] ascii)
-    {
-        return Array.ConvertAll(ascii, value => (char)value);
-    }
 
     // The characters a quoted string needs escaped on top of what the JSON encoder always escapes (the C0 controls,
     // the quote and the backslash): DEL is added by the encoder policy, the C1 controls (U+0080-U+0084 and
     // U+0086-U+009F) and the non-characters U+FFFE and U+FFFF are these ranges. YAML cannot hold them as they are.
-    public static readonly TextEscapeRange[] QuoteEscapeRanges = new TextEscapeRange[]
-    {
+    public static readonly TextEscapeRange[] QuoteEscapeRanges =
+    [
         new TextEscapeRange(0x80, 5),
         new TextEscapeRange(0x86, 26),
         new TextEscapeRange(0xFFFE, 2),
-    };
+    ];
 
-    // The non-printable characters beyond the control ranges.
-    private static readonly char[] OtherNonPrintableCharacters = new char[]
+    // UTF-8 ASCII controls can be searched as bytes; non-ASCII characters require their complete UTF-8 sequences.
+    public static readonly SearchValues<byte> NonPrintableAscii = CreateNonPrintableAscii();
+
+    private static SearchValues<byte> CreateNonPrintableAscii()
     {
-        LineSeparator,
-        ParagraphSeparator,
-        ByteOrderMark,
-        NonCharacterFffe,
-        NonCharacterFfff,
-    };
+        var characters = new List<byte>();
+        for (var c = 0; c < Space; c++)
+        {
+            characters.Add((byte)c);
+        }
 
-    // Characters that are not printable in YAML: the C0 controls (line breaks and tabs included, which need an
-    // escape or a block scalar), DEL, the C1 controls, the line and paragraph separators, the byte order mark and the
-    // non-characters U+FFFE and U+FFFF.
-    public static readonly SearchValues<char> NonPrintable = CreateNonPrintable();
+        characters.Add(Delete);
 
-    // The controls a block scalar cannot hold: every control character except the line feed and the tab.
-    public static readonly SearchValues<char> UnrepresentableInBlockScalar =
-        CreateUnrepresentableInBlockScalar();
+        return SearchValues.Create(characters.ToArray());
+    }
 
-    // Whether a character is one of the five indicators of a flow collection: the separator and the start and end
-    // of a flow sequence and of a flow mapping.
+    // The caller must validate UTF-8 first. Search ASCII controls as bytes, but compare non-ASCII characters by
+    // code point, never by continuation byte, so the existing prohibited-character set keeps its meaning.
+    public static bool ContainsNonPrintableCharacters(ReadOnlySpan<byte> value)
+    {
+        if (value.ContainsAny(NonPrintableAscii))
+        {
+            return true;
+        }
+
+        var remaining = value;
+        int nonAsciiOffset;
+        while ((nonAsciiOffset = remaining.IndexOfAnyExceptInRange(NoCharacter, Delete)) >= 0)
+        {
+            remaining = remaining[nonAsciiOffset..];
+
+            Rune.DecodeFromUtf8(remaining, out var character, out var consumed);
+
+            // ASCII controls were checked above; preserve the same C1 and non-printable code points.
+            if (IsNonPrintableCodePoint(character.Value))
+            {
+                return true;
+            }
+
+            remaining = remaining[consumed..];
+        }
+
+        return false;
+    }
+
+    // Decode Unicode characters without allocating a string; C1 controls occupy more than one UTF-8 byte.
+    public static bool ContainsUnrepresentableBlockScalarCharacters(ReadOnlySpan<byte> value)
+    {
+        if (!value.ContainsAny(NonPrintableAscii) && Ascii.IsValid(value))
+        {
+            return false;
+        }
+
+        while (!value.IsEmpty)
+        {
+            Rune.DecodeFromUtf8(value, out var character, out var consumed);
+
+            // Preserve the control ranges, allowing only LF and TAB within those ranges.
+            if (
+                (
+                    character.Value < Space
+                    || character.Value is >= Delete and <= C1ControlLastSecondByte
+                ) && character.Value is not (LineFeed or Tab)
+            )
+            {
+                return true;
+            }
+
+            value = value[consumed..];
+        }
+
+        return false;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsFlowIndicator(byte value)
     {
@@ -378,54 +437,28 @@ internal static partial class YamlSyntax
                 or FlowMappingEnd;
     }
 
-    // Whether a character is YAML white space or a line break. The only white space YAML knows is the space and the
-    // tab. Other Unicode white space (such as U+3000, the ideographic space) is ordinary text and must be kept, so
-    // char.IsWhiteSpace is not used.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsWhiteSpaceOrLineEnd(byte value)
     {
         return value is Space or Tab or CarriageReturn or LineFeed;
     }
 
-    // The same for the chars of a string that is about to be written.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsWhiteSpaceOrLineEnd(char value)
     {
         return value <= byte.MaxValue && IsWhiteSpaceOrLineEnd((byte)value);
     }
 
-    // Numbers as the YAML 1.2 core schema reads them (decimal integers and floats). Other parsers resolve these
-    // as numbers even where this library's parser would not, e.g. ".5" and "5.".
+    // Numbers as the YAML 1.2 core schema reads them (decimal integers and floats).
+    // Other parsers resolve these as numbers even where this library's parser would not, e.g. ".5" and "5.".
     [GeneratedRegex(@"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$")]
     public static partial Regex CoreNumberPattern();
 
-    // The timestamp forms of YAML 1.1: "2001-12-14", "2001-12-14T21:59:43.10-05:00" and "2001-12-14 21:59:43.10 -5".
+    // The timestamp forms of YAML 1.1
+    // "2001-12-14", "2001-12-14T21:59:43.10-05:00" and "2001-12-14 21:59:43.10 -5".
     // Groups: 1 year, 2 month, 3 day, 4 hour, 5 minute, 6 second, 7 fraction (without the dot), 8 zone.
     [GeneratedRegex(
         @"^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:[Tt]|[ \t]+)([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]*))?(?:[ \t]*(Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?$"
     )]
     public static partial Regex TimestampPattern();
-
-    private static SearchValues<char> CreateNonPrintable()
-    {
-        var characters = new List<char>();
-        for (var c = 0; c < 0x20; c++)
-            characters.Add((char)c);
-        for (var c = 0x7f; c <= 0x9f; c++)
-            characters.Add((char)c);
-        characters.AddRange(OtherNonPrintableCharacters);
-        return SearchValues.Create(characters.ToArray());
-    }
-
-    private static SearchValues<char> CreateUnrepresentableInBlockScalar()
-    {
-        var characters = new List<char>();
-        for (var c = 0; c < 0xa0; c++)
-        {
-            if (char.IsControl((char)c) && c != LineFeed && c != Tab)
-                characters.Add((char)c);
-        }
-
-        return SearchValues.Create(characters.ToArray());
-    }
 }

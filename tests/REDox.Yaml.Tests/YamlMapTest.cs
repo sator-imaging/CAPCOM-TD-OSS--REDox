@@ -1,6 +1,5 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Linq;
-using REDox;
 using REDox.Json;
 using JsonSerializer = System.Text.Json.JsonSerializer;
 
@@ -13,6 +12,7 @@ public sealed class YamlMapTest
     public void ParseEmptyMap(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
@@ -28,6 +28,7 @@ public sealed class YamlMapTest
     public void ParseSimpleMap(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
@@ -64,6 +65,7 @@ public sealed class YamlMapTest
     public void ParseNestedMap(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
@@ -80,6 +82,7 @@ public sealed class YamlMapTest
     public void ParseMapWithArray(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
@@ -87,13 +90,19 @@ public sealed class YamlMapTest
         Assert.True(
             DValue.DeepEquals(new DArray(1, 2), document.RootElement.GetProperty("a").AsValue())
         );
+
         Assert.True(
             DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
         );
     }
 
-    // A plain key is resolved like a plain value; a quoted key is a string. Only what a DElement can hold is a key:
-    // null, boolean, number, timestamp and string. A collection as a key is not supported.
+    // Only what a DElement can hold is a key:
+    //   null
+    //   boolean
+    //   number
+    //   timestamp
+    //   string
+    // A collection as a key is not supported for now.
     [Theory]
     [InlineData("1: a\n", DTokenKind.Integer)]
     [InlineData("-7: a\n", DTokenKind.Integer)]
@@ -117,6 +126,7 @@ public sealed class YamlMapTest
     public void KeyIsResolvedLikeAValue(string yaml, DTokenKind kind)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var map =
             document.RootElement.Token.Type == DTokenType.Array
                 ? document.RootElement.AsArray()[0].AsElement().AsMap()
@@ -151,8 +161,6 @@ public sealed class YamlMapTest
         );
     }
 
-    // A key keeps the form it was written in, and a string that looks like another type is quoted, so the type of
-    // every key survives writing and reading again.
     [Theory]
     [InlineData("1: a\ntrue: b\n2001-12-14: c\n1.5: d\n")]
     [InlineData("\"1\": a\n\"true\": b\n\"2001-12-14\": c\n\"1.5\": d\n")]
@@ -173,11 +181,13 @@ public sealed class YamlMapTest
     [Fact]
     public void MapWithKeysOfOtherTypesIsWrittenAndReadBack()
     {
-        var map = new DMap();
-        map.Add(DValue.Create(1), DValue.Create("integer"));
-        map.Add(DValue.Create(true), DValue.Create("boolean"));
-        map.Add(DValue.Create("1"), DValue.Create("string that looks like an integer"));
-        map.Add(DValue.Create(2.5), DValue.Create("float"));
+        var map = new DMap
+        {
+            { DValue.Create(1), DValue.Create("integer") },
+            { DValue.Create(true), DValue.Create("boolean") },
+            { DValue.Create("1"), DValue.Create("string that looks like an integer") },
+            { DValue.Create(2.5), DValue.Create("float") },
+        };
 
         var yaml = YamlDocument.EncodeToString(
             map.AsElement(),
@@ -188,20 +198,22 @@ public sealed class YamlMapTest
             "1: integer\ntrue: boolean\n\"1\": string that looks like an integer\n2.5: float\n",
             yaml
         );
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(
             new[] { DTokenKind.Integer, DTokenKind.Boolean, DTokenKind.String, DTokenKind.Float },
             parsed.RootElement.AsMap().Select(pair => pair.Key.AsElement().Token.Kind)
         );
     }
 
-    // The integer 1 and the string "1" are two keys; the integer 1 twice is a repeated key.
     [Fact]
     public void ValidationComparesKeysWithTheirTypes()
     {
         var validating = new YamlDocumentOptions { EnableValueValidation = true };
 
         using var different = YamlDocument.Parse("1: a\n\"1\": b\n", options: validating);
+
         Assert.Equal(2, different.RootElement.AsMap().Count);
 
         Assert.ThrowsAny<DocumentParseException>(() =>
@@ -209,7 +221,19 @@ public sealed class YamlMapTest
         );
     }
 
-    // "? key" is the same entry as "key: value"; the value is optional and may start on the line of the ":".
+    [Theory]
+    [InlineData("11: a\n0xB: b\n")]
+    [InlineData("{11: a, 0xB: b}")]
+    public void ValidationRejectsEquivalentIntegerKeySpellings(string yaml)
+    {
+        Assert.ThrowsAny<DocumentParseException>(() =>
+            YamlDocument.Parse(
+                yaml,
+                options: new YamlDocumentOptions { EnableValueValidation = true }
+            )
+        );
+    }
+
     [Theory]
     [InlineData("? a\n: b\n", "{\"a\":\"b\"}")]
     [InlineData("? a\n", "{\"a\":null}")]
@@ -232,7 +256,7 @@ public sealed class YamlMapTest
     public void ExplicitKeyReadsLikeAnImplicitOne(string yaml, string expectedJson)
     {
         using var document = YamlDocument.Parse(yaml);
-        using var expected = REDox.Json.JsonDocument.Parse(expectedJson);
+        using var expected = JsonDocument.Parse(expectedJson);
 
         // JSON keys are strings, so the keys of the YAML map are compared as the text they are written with.
         Assert.Equal(
@@ -270,13 +294,19 @@ public sealed class YamlMapTest
     private static string KeyText(DElement key)
     {
         if (key.Token.Kind == DTokenKind.Null)
+        {
             return "null";
+        }
 
         if (key.Token.Kind != DTokenKind.String)
+        {
             return JsonDocument.EncodeToString(key);
+        }
 
         var text = key.GetString();
+
         Debug.Assert(text != null); // GetString returns null only for a null token, which is handled above.
+
         return text;
     }
 
@@ -285,6 +315,7 @@ public sealed class YamlMapTest
     public void ParseMapWithIndentlessArray(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
@@ -292,6 +323,7 @@ public sealed class YamlMapTest
         Assert.True(
             DValue.DeepEquals(new DArray(1, 2), document.RootElement.GetProperty("a").AsValue())
         );
+
         Assert.Equal(3, document.RootElement.GetProperty("b").GetInt64());
         Assert.True(
             DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())

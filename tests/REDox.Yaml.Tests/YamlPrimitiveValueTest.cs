@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Globalization;
-using REDox;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
@@ -13,15 +12,23 @@ public sealed partial class YamlPrimitiveValueTest
     public void ParseNull(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(DTokenKind.Null, document.RootElement.Token.Kind);
     }
 
     [Theory]
     [InlineData("true", true)]
     [InlineData("FALSE", false)]
+    [InlineData("y", true)]
+    [InlineData("yes", true)]
+    [InlineData("on", true)]
+    [InlineData("n", false)]
+    [InlineData("no", false)]
+    [InlineData("off", false)]
     public void ParseBoolean(string yaml, bool expected)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(expected, document.RootElement.GetBoolean());
     }
 
@@ -31,11 +38,16 @@ public sealed partial class YamlPrimitiveValueTest
     public void ParseInteger(string yaml, long expected)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(expected, document.RootElement.GetInt64());
     }
 
-    // The integers of the YAML 1.2 core schema: decimal with an optional sign, "0x" hexadecimal and "0o" octal.
-    // A leading zero does not make a decimal integer octal (that was YAML 1.1).
+    // The integers of the YAML 1.2 core schema:
+    //   - decimal with an optional sign,
+    //   - "0x" hexadecimal
+    //   - "0o" octal
+    // TODO: A leading zero does not make a decimal integer octal (that was YAML 1.1).
+    //       This is intentionally dropped for now ("0o" can be used instead).
     [Theory]
     [InlineData("+12", 12L)]
     [InlineData("0", 0L)]
@@ -51,6 +63,7 @@ public sealed partial class YamlPrimitiveValueTest
     public void ParseCoreSchemaInteger(string yaml, long expected)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(DTokenKind.Integer, document.RootElement.Token.Kind);
         Assert.Equal(expected, document.RootElement.GetInt64());
     }
@@ -62,6 +75,7 @@ public sealed partial class YamlPrimitiveValueTest
     public void ParseIntegerAboveInt64(string yaml, ulong expected)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(expected, document.RootElement.GetUInt64());
     }
 
@@ -75,7 +89,7 @@ public sealed partial class YamlPrimitiveValueTest
         YamlTestHelper.ParsesAs(yaml, yaml);
     }
 
-    // The YAML 1.1 binary integers and the underscores between digits are numbers; an underscore is for reading only.
+    // The YAML 1.1 binary integers and the underscores between digits are numbers (an underscore is for reading only).
     // The other YAML 1.1 forms are not: "190:20:30" and "0755" as an octal.
     [Theory]
     [InlineData("0b101", 5L)]
@@ -94,6 +108,7 @@ public sealed partial class YamlPrimitiveValueTest
 
         Assert.Equal(DTokenKind.Integer, document.RootElement.Token.Kind);
         Assert.Equal(expected, document.RootElement.GetInt64());
+
         // The value does not have the underscores, so it is written without them.
         Assert.Equal(
             expected.ToString(CultureInfo.InvariantCulture) + "\n",
@@ -178,6 +193,7 @@ public sealed partial class YamlPrimitiveValueTest
     public void YamlOneDotOneIntegerFormsAreStrings(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(DTokenKind.String, document.RootElement.Token.Kind);
         Assert.Equal(yaml, document.RootElement.GetString());
     }
@@ -196,7 +212,9 @@ public sealed partial class YamlPrimitiveValueTest
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
         Assert.StartsWith("\"", yaml);
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
@@ -213,6 +231,7 @@ public sealed partial class YamlPrimitiveValueTest
     public void ParseFloat(string yaml, double expected)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(expected, document.RootElement.GetDouble());
     }
 
@@ -224,8 +243,10 @@ public sealed partial class YamlPrimitiveValueTest
     public void PrimitiveRoundTrip(string json)
     {
         using var source = JsonDocument.Parse(json);
+
         var yaml = YamlDocument.EncodeToString(source.RootElement);
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(source.RootElement.ToJsonString(), parsed.RootElement.ToJsonString());
     }
 
@@ -244,7 +265,34 @@ public sealed partial class YamlPrimitiveValueTest
     public void ParseSpecialFloat(string yaml, double expected)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(expected, document.RootElement.GetDouble());
+    }
+
+    // YAML has only these spellings: ".inf", ".Inf" and ".INF" with an optional sign, and ".nan", ".NaN" and ".NAN"
+    // without one. Any other word is a string, although a number parser may read it (as .NET does "Infinity").
+    [Theory]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    [InlineData("+Infinity")]
+    [InlineData("infinity")]
+    [InlineData("INFINITY")]
+    [InlineData("inf")]
+    [InlineData("NaN")]
+    [InlineData("nan")]
+    [InlineData("NAN")]
+    [InlineData("-nan")]
+    [InlineData(".iNf")]
+    [InlineData(".Nan")]
+    [InlineData(".infinity")]
+    [InlineData("+.nan")]
+    [InlineData("-.nan")]
+    public void WordsThatAreNotSpecialFloatsAreStrings(string yaml)
+    {
+        using var document = YamlDocument.Parse(yaml);
+
+        Assert.Equal(DTokenKind.String, document.RootElement.Token.Kind);
+        Assert.Equal(yaml, document.RootElement.GetString());
     }
 
     // Negative zero is a float: written as an integer it would lose its sign.
@@ -254,6 +302,7 @@ public sealed partial class YamlPrimitiveValueTest
         var yaml = YamlDocument.EncodeToString(DValue.Create(-0.0).AsElement());
 
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.True(double.IsNegative(parsed.RootElement.GetDouble()));
         Assert.Equal(0.0, parsed.RootElement.GetDouble());
     }
@@ -267,11 +316,10 @@ public sealed partial class YamlPrimitiveValueTest
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(value, parsed.RootElement.GetDouble());
     }
 
-    // An integer of any kind (hexadecimal, octal, binary, unsigned) is written as a number that reads back as the
-    // same value.
     [Theory]
     [InlineData(IntegerKind.Default)]
     [InlineData(IntegerKind.Hexadecimal)]
@@ -283,10 +331,10 @@ public sealed partial class YamlPrimitiveValueTest
         var yaml = YamlDocument.EncodeToString(DValue.Create(255, kind).AsElement());
 
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(255, parsed.RootElement.GetInt64());
     }
 
-    // A float of any width (half, single, decimal) reads back as the same value.
     [Fact]
     public void FloatOfAnyWidthReadsBackAsTheSameValue()
     {
@@ -303,6 +351,7 @@ public sealed partial class YamlPrimitiveValueTest
             var yaml = YamlDocument.EncodeToString(value.AsElement());
 
             using var parsed = YamlDocument.Parse(yaml);
+
             Assert.Equal(1.5, parsed.RootElement.GetDouble());
         }
     }

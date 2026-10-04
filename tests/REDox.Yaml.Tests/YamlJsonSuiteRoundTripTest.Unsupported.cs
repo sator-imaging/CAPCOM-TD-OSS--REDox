@@ -1,8 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
+﻿using System.IO;
 using System.Linq;
-using REDox;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
@@ -28,7 +25,9 @@ public sealed partial class YamlJsonSuiteRoundTripTest
                 source.RootElement,
                 new YamlWriteOptions { StringStyle = mode }
             );
+
             using var parsed = YamlDocument.Parse(yaml);
+
             var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);
             using var restored = JsonDocument.Parse(restoredJson);
 
@@ -43,6 +42,7 @@ public sealed partial class YamlJsonSuiteRoundTripTest
     public static TheoryData<string> GetUnsupportedIsolatedSurrogateFiles()
     {
         var suite = FindSuiteDirectory();
+
         return new TheoryData<string>(
             UnsupportedIsolatedSurrogateCases.Select(path =>
                 Path.Combine(suite, path.Replace('/', Path.DirectorySeparatorChar))

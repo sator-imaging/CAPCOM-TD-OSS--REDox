@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
-using System.Text;
 using REDox.Serialization;
 
 namespace REDox.Yaml;
@@ -45,7 +44,9 @@ public sealed class YamlWriter : DataWriter, IDisposable
                 WriteIndented = true,
             }
         );
+
         base.Reset(settings);
+
         _options = options;
     }
 
@@ -60,6 +61,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
 
         base.Reset(settings);
         _writer.Reset(settings, options.TextWriteOptions with { WriteIndented = true });
+
         _options = options;
         _top = 0;
         _rootWritten = false;
@@ -83,10 +85,11 @@ public sealed class YamlWriter : DataWriter, IDisposable
         {
             if (_top != 0 || !_rootWritten)
             {
-                throw new InvalidOperationException("The YAML document is not complete.");
+                ThrowHelper.ThrowInvalidOperation("The YAML document is not complete.");
             }
 
             _writer.WriteNewLine();
+
             _completed = true;
         }
 
@@ -107,7 +110,9 @@ public sealed class YamlWriter : DataWriter, IDisposable
         if (_top == 0)
         {
             StartRoot();
+
             depth = 0;
+
             return false;
         }
 
@@ -115,19 +120,23 @@ public sealed class YamlWriter : DataWriter, IDisposable
         if (frame.IsMap && !frame.ValueNext)
         {
             BeginEntry(ref frame);
+
             depth = frame.Depth;
+
             return true;
         }
 
         if (!frame.IsMap)
         {
             BeginEntry(ref frame);
-            _writer.WriteUtf8Byte((byte)YamlSyntax.Dash);
+            _writer.WriteUtf8Byte(YamlSyntax.Dash);
             _writer.PushIndent();
         }
 
-        _writer.WriteUtf8Byte((byte)YamlSyntax.Space);
+        _writer.WriteUtf8Byte(YamlSyntax.Space);
+
         depth = frame.Depth + 1;
+
         return false;
     }
 
@@ -141,9 +150,11 @@ public sealed class YamlWriter : DataWriter, IDisposable
         ref var frame = ref _frames[_top - 1];
         if (key)
         {
-            _writer.WriteUtf8Byte((byte)YamlSyntax.MappingValueIndicator);
+            _writer.WriteUtf8Byte(YamlSyntax.MappingValueIndicator);
             _writer.PushIndent();
+
             frame.ValueNext = true;
+
             return;
         }
 
@@ -153,6 +164,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     private void EndEntry(ref Frame frame)
     {
         _writer.PopIndent();
+
         frame.ValueNext = false;
         frame.Count++;
     }
@@ -161,7 +173,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     {
         if (_rootWritten)
         {
-            throw new InvalidOperationException("A YAML document has one root value.");
+            ThrowHelper.ThrowInvalidOperation("A YAML document has one root value.");
         }
 
         _rootWritten = true;
@@ -180,13 +192,13 @@ public sealed class YamlWriter : DataWriter, IDisposable
             ref var parent = ref _frames[_top - 1];
             if (parent.IsMap && !parent.ValueNext)
             {
-                throw new NotSupportedException("YAML collection keys are not supported.");
+                ThrowHelper.ThrowNotSupported("YAML collection keys are not supported.");
             }
 
             if (!parent.IsMap)
             {
                 BeginEntry(ref parent);
-                _writer.WriteUtf8Byte((byte)YamlSyntax.Dash);
+                _writer.WriteUtf8Byte(YamlSyntax.Dash);
                 _writer.PushIndent();
             }
 
@@ -196,7 +208,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
 
         if (_top >= SerializerSettings.DefaultMaxDepth)
         {
-            throw new InvalidOperationException(
+            ThrowHelper.ThrowInvalidOperation(
                 $"Exceeded maximum depth of {SerializerSettings.DefaultMaxDepth}."
             );
         }
@@ -218,7 +230,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     {
         if (_top == 0 || _frames[_top - 1].IsMap != isMap)
         {
-            throw new InvalidOperationException(
+            ThrowHelper.ThrowInvalidOperation(
                 "The end does not match the start of the collection."
             );
         }
@@ -226,7 +238,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
         var frame = _frames[--_top];
         if (frame.ValueNext)
         {
-            throw new InvalidOperationException("A map key has no value.");
+            ThrowHelper.ThrowInvalidOperation("A map key has no value.");
         }
 
         // A collection with no entries is written on the line of its key or dash, as the flow form.
@@ -234,7 +246,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
         {
             if (frame.AfterIndicator)
             {
-                _writer.WriteUtf8Byte((byte)YamlSyntax.Space);
+                _writer.WriteUtf8Byte(YamlSyntax.Space);
             }
 
             _writer.WriteString(isMap ? YamlSyntax.EmptyMappingUtf8 : YamlSyntax.EmptySequenceUtf8);
@@ -274,6 +286,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     public override void WriteNull()
     {
         var key = BeginScalar(out _);
+
         _writer.WriteNull();
         EndScalar(key);
     }
@@ -282,6 +295,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     public override void WriteBoolean(bool value)
     {
         var key = BeginScalar(out _);
+
         _writer.WriteBoolean(value);
         EndScalar(key);
     }
@@ -290,6 +304,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     public override void WriteInt64(long value)
     {
         var key = BeginScalar(out _);
+
         _writer.WriteInt64(value);
         EndScalar(key);
     }
@@ -298,6 +313,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     public override void WriteUInt64(ulong value)
     {
         var key = BeginScalar(out _);
+
         _writer.WriteUInt64(value);
         EndScalar(key);
     }
@@ -342,6 +358,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     public override void WriteDecimal(decimal value)
     {
         var key = BeginScalar(out _);
+
         _writer.WriteDecimal(value);
         EndScalar(key);
     }
@@ -353,6 +370,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     )
     {
         var key = BeginScalar(out _);
+
         _writer.WriteString(value);
         EndScalar(key);
     }
@@ -361,6 +379,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     public override void WriteDateTime(DateTime value)
     {
         var key = BeginScalar(out _);
+
         _writer.WriteTimestamp(value);
         EndScalar(key);
     }
@@ -369,6 +388,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     public override void WriteDateTimeOffset(DateTimeOffset value)
     {
         var key = BeginScalar(out _);
+
         _writer.WriteTimestamp(value);
         EndScalar(key);
     }
@@ -379,7 +399,15 @@ public sealed class YamlWriter : DataWriter, IDisposable
         ArgumentNullException.ThrowIfNull(value);
 
         var key = BeginScalar(out var depth);
-        YamlDocument.WriteStringValue(_writer, value, _options, depth, key);
+
+        YamlDocument.WriteStringValue(
+            _writer,
+            Utf8Helper.GetUtf8String(value),
+            _options,
+            depth,
+            key
+        );
+
         EndScalar(key);
     }
 
@@ -392,7 +420,10 @@ public sealed class YamlWriter : DataWriter, IDisposable
     /// <inheritdoc />
     public override void WriteString(ReadOnlySpan<byte> utf8Bytes)
     {
-        WriteString(Encoding.UTF8.GetString(utf8Bytes));
+        var key = BeginScalar(out var depth);
+
+        YamlDocument.WriteStringValue(_writer, utf8Bytes, _options, depth, key);
+        EndScalar(key);
     }
 
     /// <inheritdoc />

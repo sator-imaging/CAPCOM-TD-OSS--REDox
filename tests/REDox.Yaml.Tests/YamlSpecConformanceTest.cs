@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using REDox;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
@@ -126,37 +125,46 @@ public sealed partial class YamlSpecConformanceTest
         "9MMW",
         "M2N8/00",
         "V9D5",
+        // Ambiguous Spec tests are ignored. Tests expected values may or may not align to the YAML spec.
+        // "Always adds newline" rule is simple, but it can lead unexpected user data mutation.
+        // (Current behavior: don't add newline for a block string at the end of file WITHOUT newline before EOF)
+        //
+        // Both cases are a block scalar whose last line the text ends without a line break (the line break after the
+        // indicator, which ends the header line, is ignored: it is not part of the value), and both expect the end of the
+        // text to be converted to a line break: a line feed is inserted after the last line ("|+": "\n", "|": "x\n \n").
+        // This does not match the YAML 1.2 specification: the last line ends with a line break or with the end of the
+        // text, and only a line break gives a line feed (b-chomped-last). The library follows the specification and
+        // inserts none (""; "x\n "). This difference is on purpose.
+        "JEF9/02",
+        "L24T/01",
     ];
 
     [Theory]
     [MemberData(nameof(GetCases))]
     public void CaseMatchesExpectedJsonOrFails(string caseId)
     {
-        RunCase(caseId);
-    }
-
-    // A case with an "error" file must fail to parse. Otherwise it must parse, and its value must equal in.json
-    // when the case has one (some valid cases cannot be expressed as JSON).
-    private static void RunCase(string caseId)
-    {
         var caseDirectory = Path.Combine(
             FindSuiteDirectory(),
             caseId.Replace('/', Path.DirectorySeparatorChar)
         );
+
         var yaml = File.ReadAllText(Path.Combine(caseDirectory, "in.yaml"));
         if (File.Exists(Path.Combine(caseDirectory, "error")))
         {
             Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse(yaml));
+
             return;
         }
 
         using var actualDocument = YamlDocument.Parse(yaml);
+
         var jsonPath = Path.Combine(caseDirectory, "in.json");
 
         // An empty in.json means the stream holds no document, which has no value to compare with.
         if (File.Exists(jsonPath) && new FileInfo(jsonPath).Length == 0)
         {
             YamlTestHelper.IsEmptyDocument(actualDocument);
+
             return;
         }
 
@@ -170,9 +178,11 @@ public sealed partial class YamlSpecConformanceTest
             var expectedPath = new[] { "out.yaml", "emit.yaml" }
                 .Select(name => Path.Combine(caseDirectory, name))
                 .FirstOrDefault(File.Exists);
+
             if (expectedPath != null)
             {
                 using var expectedDocument = YamlDocument.Parse(File.ReadAllText(expectedPath));
+
                 Assert.True(
                     DValue.DeepEquals(
                         expectedDocument.RootElement.AsValue(),
@@ -189,6 +199,7 @@ public sealed partial class YamlSpecConformanceTest
         using var actual = JsonDocument.Parse(
             JsonDocument.EncodeToString(actualDocument.RootElement)
         );
+
         Assert.True(
             DValue.DeepEquals(expected.RootElement.AsValue(), actual.RootElement.AsValue()),
             $"YAML suite case {caseId} changed its value."
@@ -240,9 +251,13 @@ public sealed partial class YamlSpecConformanceTest
         while (current != null)
         {
             var path = Path.Combine(current.FullName, "external", "yaml-test-suite");
+
             // The pinned data release stores case IDs directly at the repository root.
             if (Directory.Exists(Path.Combine(path, "FQ7F")))
+            {
                 return path;
+            }
+
             current = current.Parent;
         }
 

@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Text.Json;
-using REDox;
 
 namespace REDox.Yaml.Tests;
 
@@ -32,6 +31,7 @@ public sealed class YamlStringsTest
     public void ParseStringStyles(string yaml, string expected)
     {
         using var document = YamlDocument.Parse(yaml);
+
         Assert.Equal(expected, document.RootElement.GetString());
     }
 
@@ -51,7 +51,9 @@ public sealed class YamlStringsTest
                 source,
                 new YamlWriteOptions { StringStyle = mode }
             );
+
             using var parsed = YamlDocument.Parse(yaml);
+
             Assert.Equal(value, parsed.RootElement.GetString());
         }
     }
@@ -99,7 +101,9 @@ public sealed class YamlStringsTest
         );
 
         Assert.Equal(plain, !yaml.StartsWith('"'));
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
@@ -115,14 +119,17 @@ public sealed class YamlStringsTest
     public void KeyIsQuotedOnlyWhenNeeded(string key, bool plain)
     {
         var json = "{" + JsonSerializer.Serialize(key) + ":1}";
-        using var source = REDox.Json.JsonDocument.Parse(json);
+        using var source = Json.JsonDocument.Parse(json);
+
         var yaml = YamlDocument.EncodeToString(
             source.RootElement,
             new YamlWriteOptions { NewLine = "\n" }
         );
 
         Assert.Equal(plain, !yaml.StartsWith('"'));
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(1, parsed.RootElement.GetProperty(key).GetInt64());
     }
 
@@ -152,7 +159,9 @@ public sealed class YamlStringsTest
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
         Assert.Equal(escaped, !yaml.Contains(character));
+
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
@@ -166,11 +175,12 @@ public sealed class YamlStringsTest
     {
         var key = "k" + ((char)codePoint) + "k";
         var json = "{" + JsonSerializer.Serialize(key) + ":1}";
-        using var source = REDox.Json.JsonDocument.Parse(json);
+        using var source = Json.JsonDocument.Parse(json);
 
         var yaml = YamlDocument.EncodeToString(source.RootElement);
 
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(1, parsed.RootElement.GetProperty(key).GetInt64());
     }
 
@@ -209,6 +219,7 @@ public sealed class YamlStringsTest
         );
 
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
@@ -225,6 +236,7 @@ public sealed class YamlStringsTest
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal("a" + (char)0xfffd + "b", parsed.RootElement.GetString());
     }
 
@@ -236,6 +248,7 @@ public sealed class YamlStringsTest
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
@@ -266,6 +279,7 @@ public sealed class YamlStringsTest
     private static YamlDocument Duplicate(string yaml)
     {
         using var original = YamlDocument.Parse(yaml);
+
         return original.Duplicate();
     }
 
@@ -273,6 +287,7 @@ public sealed class YamlStringsTest
     public void FoldedPlainScalarKeepsBlankLine()
     {
         using var document = YamlDocument.Parse("plain: a\n  b\n\n  c\n");
+
         Assert.Equal("a b\nc", document.RootElement.GetProperty("plain").GetString());
     }
 }

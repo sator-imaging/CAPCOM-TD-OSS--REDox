@@ -1,11 +1,10 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
-using REDox;
 
 namespace REDox.Yaml.Tests;
 
@@ -21,17 +20,13 @@ public sealed partial class YamlApiTest
 
     private static void AssertIsSample(YamlDocument document)
     {
-        using var expected = REDox.Json.JsonDocument.Parse(SampleJson);
+        using var expected = Json.JsonDocument.Parse(SampleJson);
+
         Assert.True(
             DValue.DeepEquals(expected.RootElement.AsValue(), document.RootElement.AsValue())
         );
     }
 
-    // Public entry points: reading
-
-    // A stream with no document is valid YAML, not an error (see YamlTestHelper.IsEmptyDocument for what is checked
-    // and why it cannot be more). The first three are yaml-test-suite cases whose in.json is empty: 8G76, 98YD and
-    // AVM7.
     [Theory]
     [InlineData("  # Comment\n   \n\n\n")]
     [InlineData("# Comment only.\n")]
@@ -87,6 +82,7 @@ public sealed partial class YamlApiTest
 
         Assert.True(parsed);
         Assert.NotNull(document);
+
         using (document)
         {
             AssertIsSample(document);
@@ -102,8 +98,6 @@ public sealed partial class YamlApiTest
         Assert.Null(document);
     }
 
-    // The parameters are not nullable, so passing null is a compiler warning: it is switched off only for the three
-    // calls, where the null is the point of the test. The check is for the callers that do not see the warning.
     [Fact]
     public void ParseRejectsNullArguments()
     {
@@ -111,11 +105,10 @@ public sealed partial class YamlApiTest
         byte[]? bytes = null;
         Stream? stream = null;
 
-#pragma warning disable CS8604
-        Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(text));
-        Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(bytes));
-        Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(stream));
-#pragma warning restore CS8604
+        // Parse doesn't accept nullable values
+        Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(text!));
+        Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(bytes!));
+        Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(stream!));
     }
 
     // Public entry points: writing. Every one writes what EncodeToString writes.
@@ -151,6 +144,7 @@ public sealed partial class YamlApiTest
     public void EncodeToBufferWriter()
     {
         using var document = YamlDocument.Parse(Sample);
+
         var buffer = new ArrayBufferWriter<byte>();
 
         YamlDocument.EncodeTo(document.RootElement, buffer, Options);
@@ -194,8 +188,8 @@ public sealed partial class YamlApiTest
         public int? Optional { get; set; }
         public Color Favorite { get; set; }
         public Address? Address { get; set; }
-        public List<string> Tags { get; set; } = new();
-        public Dictionary<string, int> Counts { get; set; } = new();
+        public List<string> Tags { get; set; } = [];
+        public Dictionary<string, int> Counts { get; set; } = [];
     }
 
     private static Person CreatePerson() =>
@@ -208,7 +202,7 @@ public sealed partial class YamlApiTest
             Optional = null,
             Favorite = Color.Green,
             Address = new Address { City = "true", Number = 7 },
-            Tags = new List<string> { "x", "123", "", "null" },
+            Tags = ["x", "123", "", "null"],
             Counts = new Dictionary<string, int> { ["one"] = 1, ["two"] = 2 },
         };
 
@@ -223,7 +217,9 @@ public sealed partial class YamlApiTest
             DValue.From(source).AsElement(),
             new YamlWriteOptions { StringStyle = mode }
         );
+
         using var document = YamlDocument.Parse(yaml);
+
         var restored = ToObject<Person>(document.RootElement);
 
         Assert.Equal(source.Name, restored.Name);
@@ -245,6 +241,7 @@ public sealed partial class YamlApiTest
     {
         const string yaml =
             "Name: Ann\nAge: 30\nTags:\n  - a\n  - b\nAddress:\n  City: Oslo\n  Number: 3\n";
+
         using var document = YamlDocument.Parse(yaml);
 
         var person = ToObject<Person>(document.RootElement);
@@ -267,6 +264,7 @@ public sealed partial class YamlApiTest
 
         var yaml = YamlDocument.EncodeToString(DValue.From(source).AsElement());
         using var document = YamlDocument.Parse(yaml);
+
         var restored = ToObject<List<Address>>(document.RootElement);
 
         Assert.Equal(new[] { "A", "yes" }, restored.Select(a => a.City));
@@ -277,7 +275,9 @@ public sealed partial class YamlApiTest
         where T : class
     {
         var value = element.ToObject(typeof(T));
-        Debug.Assert(value is T); // ToObject returns null only for a null value, and every value here is an object or a list.
+
+        Debug.Assert(value is T);
+
         return (T)value;
     }
 }

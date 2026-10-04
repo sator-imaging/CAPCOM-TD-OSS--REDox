@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Text;
 
 namespace REDox.Yaml.Tests;
@@ -12,10 +12,12 @@ public sealed class YamlEncodingAndNewLineTest
             .Unicode.GetPreamble()
             .Concat(Encoding.Unicode.GetBytes("a: 1\n"))
             .ToArray();
+
         using var document = YamlDocument.Parse(
             bytes,
             options: new YamlDocumentOptions { AutoDetectEncoding = true }
         );
+
         Assert.Equal(1, document.RootElement.GetPropertyCount());
         Assert.Equal(1, document.RootElement.GetProperty("a").GetInt64());
     }
@@ -32,6 +34,7 @@ public sealed class YamlEncodingAndNewLineTest
             bytes,
             options: new YamlDocumentOptions { AutoDetectEncoding = true }
         );
+
         Assert.Equal(1, document.RootElement.GetProperty("a").GetInt64());
     }
 
@@ -43,10 +46,12 @@ public sealed class YamlEncodingAndNewLineTest
         var bytes = new byte[] { 0xef, 0xbb, 0xbf }
             .Concat(Encoding.UTF8.GetBytes("a: 1\n"))
             .ToArray();
+
         using var document = YamlDocument.Parse(
             bytes,
             options: new YamlDocumentOptions { AutoDetectEncoding = autoDetectEncoding }
         );
+
         Assert.Equal(1, document.RootElement.GetProperty("a").GetInt64());
     }
 
@@ -57,6 +62,7 @@ public sealed class YamlEncodingAndNewLineTest
             .Unicode.GetPreamble()
             .Concat(Encoding.Unicode.GetBytes("a: 1\n"))
             .ToArray();
+
         Assert.False(YamlDocument.TryParse(bytes, out var document));
         Assert.Null(document);
     }
@@ -91,6 +97,7 @@ public sealed class YamlEncodingAndNewLineTest
             bytes,
             options: new YamlDocumentOptions { AutoDetectEncoding = true }
         );
+
         Assert.Equal("😀 é", document.RootElement.GetProperty("é日").GetString());
         Assert.Equal(
             1,
@@ -104,6 +111,7 @@ public sealed class YamlEncodingAndNewLineTest
                 options: new YamlDocumentOptions { AutoDetectEncoding = true }
             )
         );
+
         Assert.Equal(8, exception.BytePosition);
     }
 
@@ -111,10 +119,12 @@ public sealed class YamlEncodingAndNewLineTest
     public void WriterUsesRequestedNewLine()
     {
         using var document = YamlDocument.Parse("a: 1\nb: 2\n");
+
         var encoded = YamlDocument.EncodeToString(
             document.RootElement,
             new YamlWriteOptions { NewLine = "\r\n" }
         );
+
         Assert.Contains("\r\n", encoded);
     }
 }

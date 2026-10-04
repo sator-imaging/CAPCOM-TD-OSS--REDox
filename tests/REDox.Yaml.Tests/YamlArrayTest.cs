@@ -1,6 +1,4 @@
-using REDox;
-
-namespace REDox.Yaml.Tests;
+﻿namespace REDox.Yaml.Tests;
 
 public sealed class YamlArrayTest
 {
@@ -9,6 +7,7 @@ public sealed class YamlArrayTest
     public void ParseEmptyArray(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
@@ -23,12 +22,14 @@ public sealed class YamlArrayTest
     public void ParseMixedArray(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.True(
             DValue.DeepEquals(new DArray(1, true, DValue.Null), document.RootElement.AsValue())
         );
+
         Assert.True(
             DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
         );
@@ -39,6 +40,7 @@ public sealed class YamlArrayTest
     public void ParseBlockArray(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
@@ -74,6 +76,7 @@ public sealed class YamlArrayTest
     public void ParseNestedArray(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
+
         var encoded = YamlDocument.EncodeToString(document.RootElement);
         using var parsed = YamlDocument.Parse(encoded);
 
@@ -84,6 +87,7 @@ public sealed class YamlArrayTest
                 document.RootElement.AsValue()
             )
         );
+
         Assert.True(
             DValue.DeepEquals(document.RootElement.AsValue(), parsed.RootElement.AsValue())
         );

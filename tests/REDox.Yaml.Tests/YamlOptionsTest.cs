@@ -1,8 +1,6 @@
-using System;
+﻿using System;
 using System.Buffers;
-using System.Linq;
 using System.Text;
-using REDox;
 
 namespace REDox.Yaml.Tests;
 
@@ -13,10 +11,9 @@ public sealed partial class YamlOptionsTest
     private static string Encode(string yaml, YamlWriteOptions options)
     {
         using var document = YamlDocument.Parse(yaml);
+
         return YamlDocument.EncodeToString(document.RootElement, options);
     }
-
-    // Writing: the text that comes out
 
     [Fact]
     public void DefaultOutputIsIndentedByTwoSpaces()
@@ -81,7 +78,9 @@ public sealed partial class YamlOptionsTest
         );
 
         Assert.Equal(writeBom, bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble));
+
         using var parsed = YamlDocument.Parse(bytes);
+
         Assert.Equal(1, parsed.RootElement.GetProperty("a").GetInt64());
     }
 
@@ -89,19 +88,20 @@ public sealed partial class YamlOptionsTest
     public void ByteOrderMarkIsWrittenByEveryEntryPoint()
     {
         using var document = YamlDocument.Parse("a: 1\n");
+
         var options = new YamlWriteOptions { WriteBom = true };
 
         using var stream = new System.IO.MemoryStream();
+
         YamlDocument.EncodeTo(document.RootElement, stream, options);
 
         Assert.True(stream.ToArray().AsSpan().StartsWith(Encoding.UTF8.Preamble));
 
         var buffer = new ArrayBufferWriter<byte>();
+
         YamlDocument.EncodeTo(document.RootElement, buffer, options);
         Assert.True(buffer.WrittenSpan.StartsWith(Encoding.UTF8.Preamble));
     }
-
-    // Reading: limits and validation
 
     // The root is depth 0, and every value below it, a scalar included, is one deeper.
     [Theory]
@@ -120,6 +120,7 @@ public sealed partial class YamlOptionsTest
         if (allowed)
         {
             using var document = YamlDocument.Parse(yaml, options: options);
+
             Assert.True(document.RootElement.IsValid);
         }
         else
@@ -155,7 +156,9 @@ public sealed partial class YamlOptionsTest
         Assert.ThrowsAny<DocumentParseException>(() =>
             YamlDocument.Parse(yaml, options: validating)
         );
+
         using var lenient = YamlDocument.Parse(yaml);
+
         Assert.True(lenient.RootElement.IsValid);
     }
 
@@ -201,8 +204,9 @@ public sealed partial class YamlOptionsTest
         Assert.True(document.RootElement.IsValid);
     }
 
-    // The explicit indentation indicator of a block scalar at the root counts from RootIndentationLevel: 0 by default (libyaml),
-    // -1 as in the YAML 1.2 specification.
+    // The explicit indentation indicator of a block scalar at the root counts from RootIndentationLevel:
+    //   - 0 by default (libyaml)
+    //   - -1 as in the YAML 1.2 specification
     [Theory]
     [InlineData(0, "|2-\n    indented\n", "  indented")]
     [InlineData(-1, "|2-\n    indented\n", "   indented")]
@@ -254,8 +258,6 @@ public sealed partial class YamlOptionsTest
         );
     }
 
-    // Editing a parsed document
-
     [Fact]
     public void ReplacedValueIsWritten()
     {
@@ -292,6 +294,7 @@ public sealed partial class YamlOptionsTest
 
         var yaml = YamlDocument.EncodeToString(document.RootElement, NewLineLf);
         using var parsed = YamlDocument.Parse(yaml);
+
         Assert.Equal("true", parsed.RootElement.GetProperty("b").GetString());
         Assert.Equal("2001-12-14", parsed.RootElement.GetProperty("c").GetString());
     }
@@ -302,8 +305,10 @@ public sealed partial class YamlOptionsTest
         using var document = YamlDocument.Parse("- 1\n- 2\n- 3\n");
 
         var array = document.RootElement.AsArray();
+
         array.Add(DValue.Create(4));
         array.RemoveAt(0);
+
         array[0] = DValue.Create("two");
 
         Assert.Equal(
@@ -318,6 +323,7 @@ public sealed partial class YamlOptionsTest
         using var document = YamlDocument.Parse("a:\n  b: 1\nlist: [1, 2]\n");
 
         document.RootElement.GetProperty("a").AsObject()["b"] = DValue.Create("x: y");
+
         document.RootElement.GetProperty("list").AsArray().Add(DValue.Create(3));
 
         YamlTestHelper.ParsesAs(
@@ -333,6 +339,7 @@ public sealed partial class YamlOptionsTest
         using var duplicate = original.Duplicate();
 
         duplicate.RootElement.AsObject()["a"] = DValue.Create(2);
+
         duplicate.RootElement.AsObject().Add("added", DValue.Create(true));
         duplicate.RootElement.GetProperty("list").AsArray().Add(DValue.Create("y"));
 
@@ -340,6 +347,7 @@ public sealed partial class YamlOptionsTest
             "a: 1\nlist:\n  - x\ntext: hello\n",
             YamlDocument.EncodeToString(original.RootElement, NewLineLf)
         );
+
         Assert.Equal(2, duplicate.RootElement.GetProperty("a").GetInt64());
         Assert.Equal(2, duplicate.RootElement.GetProperty("list").GetArrayLength());
     }
@@ -351,6 +359,7 @@ public sealed partial class YamlOptionsTest
         using var duplicate = original.Duplicate();
 
         original.RootElement.AsObject()["a"] = DValue.Create(2);
+
         original.RootElement.AsObject().Add("added", DValue.Create(true));
         original.RootElement.GetProperty("list").AsArray().Add(DValue.Create("y"));
 
@@ -368,7 +377,9 @@ public sealed partial class YamlOptionsTest
             yaml,
             options: new YamlDocumentOptions { PreserveTrivia = true }
         );
+
         using var duplicate = original.Duplicate();
+
         var options = new YamlWriteOptions { NewLine = "\n", PreserveTrivia = true };
 
         Assert.Equal(

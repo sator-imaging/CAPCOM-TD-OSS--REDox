@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 
 namespace REDox.Yaml.Tests;
 
@@ -17,6 +17,7 @@ public sealed class YamlTriviaTest
             document.RootElement,
             new YamlWriteOptions { PreserveTrivia = true }
         );
+
         Assert.Contains("# first", encoded);
         Assert.Contains("# second", encoded);
     }
@@ -32,16 +33,17 @@ public sealed class YamlTriviaTest
             yaml,
             options: new YamlDocumentOptions { PreserveTrivia = true }
         );
+
         var encoded = YamlDocument.EncodeToString(
             document.RootElement,
             new YamlWriteOptions { PreserveTrivia = true }
         );
 
         Assert.Contains(comment, encoded);
+
         using var reparsed = YamlDocument.Parse(encoded);
     }
 
-    // The white space in front of a trailing comment is kept as it was written, however long it is.
     [Theory]
     [InlineData("a: some       # comment\nb: 2\n")]
     [InlineData("a: some\t# comment\nb: 2\n")]
@@ -73,6 +75,7 @@ public sealed class YamlTriviaTest
             "a: 1 # note\nb: 2\n",
             options: new YamlDocumentOptions { PreserveTrivia = true }
         );
+
         var encoded = YamlDocument.EncodeToString(
             document.RootElement,
             new YamlWriteOptions { PreserveTrivia = true, NewLine = "\n" }
@@ -81,7 +84,51 @@ public sealed class YamlTriviaTest
         Assert.Equal("a: 1 # note\nb: 2\n", encoded);
     }
 
-    // Keys are always written double-quoted, so the expected text quotes them too.
+    // A trailing comment must remain trivia when a string becomes a block scalar. Appending it to the
+    // final content line changes the value, including for the last value nested inside a collection.
+    [Theory]
+    [InlineData("a: text # note\nb: next\n")]
+    [InlineData("a: text # note\n")]
+    [InlineData("- text # note\n- next\n")]
+    [InlineData("- text # note\n")]
+    [InlineData("text # note\n")]
+    [InlineData("outer:\n  - text # note\nnext: value\n")]
+    [InlineData("\"\" # note\n")]
+    [InlineData("\"text\\n\" # note\n")]
+    [InlineData("\"text\\n\\n\" # note\n")]
+    [InlineData("\"first\\nsecond\" # note\n")]
+    public void MultilineOutputKeepsTrailingCommentsOutsideStringValues(string yaml)
+    {
+        var parseOptions = new YamlDocumentOptions { PreserveTrivia = true };
+        using var document = YamlDocument.Parse(yaml, options: parseOptions);
+
+        var encoded = YamlDocument.EncodeToString(
+            document.RootElement,
+            new YamlWriteOptions
+            {
+                PreserveTrivia = true,
+                StringStyle = YamlStringStyle.Multiline,
+                NewLine = "\n",
+            }
+        );
+
+        using var reparsed = YamlDocument.Parse(encoded, options: parseOptions);
+
+        Assert.True(
+            DValue.DeepEquals(document.RootElement.AsValue(), reparsed.RootElement.AsValue()),
+            encoded
+        );
+
+        // Writing the reparsed value in quote style proves that the comment survived as trivia,
+        // rather than merely checking for a hash inside the block scalar's source text.
+        var encodedAgain = YamlDocument.EncodeToString(
+            reparsed.RootElement,
+            new YamlWriteOptions { PreserveTrivia = true, NewLine = "\n" }
+        );
+
+        Assert.Contains("# note", encodedAgain);
+    }
+
     [Theory]
     [InlineData("1: 1 # one\n2: 2 # two\n", "1: 1 # one\n2: 2 # two\n")]
     [InlineData("- 1 # one\n- 2 # two\n", "- 1 # one\n- 2 # two\n")]
@@ -96,6 +143,7 @@ public sealed class YamlTriviaTest
             yaml,
             options: new YamlDocumentOptions { PreserveTrivia = true }
         );
+
         var encoded = YamlDocument.EncodeToString(
             document.RootElement,
             new YamlWriteOptions { PreserveTrivia = true, NewLine = "\n" }
@@ -112,12 +160,14 @@ public sealed class YamlTriviaTest
             yaml,
             options: new YamlDocumentOptions { PreserveTrivia = true }
         );
+
         var encoded = YamlDocument.EncodeToString(
             document.RootElement,
             new YamlWriteOptions { PreserveTrivia = true }
         );
 
         using var reparsed = YamlDocument.Parse(encoded);
+
         Assert.Equal("x # not a comment\ny\n", reparsed.RootElement.GetProperty("a").GetString());
         Assert.Equal("c # d", reparsed.RootElement.GetProperty("b").GetString());
         Assert.Equal("e #f", reparsed.RootElement.GetProperty("c").GetString());
@@ -137,21 +187,25 @@ public sealed class YamlTriviaTest
 
         // The root is the null that stands in for the missing content, and it carries the comments.
         Assert.Equal(DTokenKind.Null, document.RootElement.Token.Kind);
+
         var comments = document
             .RootElement.EnumerateTrivia()
             .Where(trivia => trivia.Kind == TriviaKind.LineComment)
             .Select(trivia => trivia.GetString())
             .ToArray();
+
         var expected = yaml.Split('\n')
             .Select(line => line.Trim())
             .Where(line => line.StartsWith('#'))
             .ToArray();
+
         Assert.Equal(expected, comments);
 
         var encoded = YamlDocument.EncodeToString(
             document.RootElement,
             new YamlWriteOptions { PreserveTrivia = true, NewLine = "\n" }
         );
+
         foreach (var comment in expected)
         {
             Assert.Contains(comment, encoded);
@@ -159,6 +213,7 @@ public sealed class YamlTriviaTest
 
         // Written back, the comments must still be read as comments only.
         using var reparsed = YamlDocument.Parse(encoded);
+
         Assert.Equal(DTokenKind.Null, reparsed.RootElement.Token.Kind);
     }
 
@@ -169,10 +224,12 @@ public sealed class YamlTriviaTest
             "a: 1\n\nb: 2\n",
             options: new YamlDocumentOptions { PreserveTrivia = true }
         );
+
         var encoded = YamlDocument.EncodeToString(
             document.RootElement,
             new YamlWriteOptions { PreserveTrivia = true, NewLine = "\n" }
         );
+
         Assert.Contains("\n\n", encoded);
     }
 }
