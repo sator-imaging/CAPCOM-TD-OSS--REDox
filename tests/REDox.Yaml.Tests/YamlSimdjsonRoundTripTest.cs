@@ -1,17 +1,13 @@
-using System;
-using System.Collections.Generic;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Text;
-using REDox;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
 public sealed class YamlSimdjsonRoundTripTest
 {
-    // Real-world JSON from simdjson-data (twitter, canada, citm, gsoc, ...): large and varied documents that exercise
-    // the conversion far more than the small cases of JSONTestSuite.
     [Theory]
     [MemberData(nameof(GetJsonFiles))]
     public void JsonRoundTripsThroughYaml(string filePath)
@@ -32,6 +28,7 @@ public sealed class YamlSimdjsonRoundTripTest
             catch (NotSupportedException) when (mode == YamlStringStyle.Multiline)
             {
                 YamlTestHelper.AssertMultilineRefusalIsJustified(bytes, Path.GetFileName(filePath));
+
                 continue;
             }
 
@@ -39,6 +36,7 @@ public sealed class YamlSimdjsonRoundTripTest
             using var restored = JsonDocument.Parse(
                 JsonDocument.EncodeToString(parsed.RootElement)
             );
+
             Assert.True(
                 DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
                 $"YAML round-trip changed {Path.GetFileName(filePath)} in {mode} mode."
@@ -46,16 +44,17 @@ public sealed class YamlSimdjsonRoundTripTest
         }
     }
 
-    // Reading what was written and writing it again must give the same text: nothing may drift on the way.
     [Theory]
     [MemberData(nameof(GetJsonFiles))]
     public void YamlOutputIsStable(string filePath)
     {
         using var source = JsonDocument.Parse(File.ReadAllBytes(filePath));
+
         var options = new YamlWriteOptions { NewLine = "\n" };
 
         var yaml = YamlDocument.EncodeToString(source.RootElement, options);
         using var parsed = YamlDocument.Parse(yaml);
+
         var again = YamlDocument.EncodeToString(parsed.RootElement, options);
 
         Assert.True(
@@ -64,18 +63,18 @@ public sealed class YamlSimdjsonRoundTripTest
         );
     }
 
-    // amazon_cellphones.ndjson, the fourth dataset, holds one JSON document per line. Each line is converted on its own,
-    // so the test covers many small documents with mixed null, number and string values instead of one large one.
     [Fact]
     public void EveryLineOfTheNdjsonFileRoundTripsThroughYaml()
     {
         var path = Path.Combine(FindDataDirectory(), "amazon_cellphones.ndjson");
         var lines = File.ReadLines(path).Where(line => line.Length > 0).ToArray();
+
         Assert.NotEmpty(lines);
 
         for (var index = 0; index < lines.Length; index++)
         {
             using var source = JsonDocument.Parse(lines[index]);
+
             foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
             {
                 string yaml;
@@ -92,6 +91,7 @@ public sealed class YamlSimdjsonRoundTripTest
                         Encoding.UTF8.GetBytes(lines[index]),
                         $"line {index + 1} of the ndjson file"
                     );
+
                     continue;
                 }
 
@@ -99,6 +99,7 @@ public sealed class YamlSimdjsonRoundTripTest
                 using var restored = JsonDocument.Parse(
                     JsonDocument.EncodeToString(parsed.RootElement)
                 );
+
                 Assert.True(
                     DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
                     $"YAML round-trip changed line {index + 1} of the ndjson file in {mode} mode."
@@ -107,9 +108,10 @@ public sealed class YamlSimdjsonRoundTripTest
         }
     }
 
-    // The benchmark datasets of simdjson, chosen by name: large documents with many numbers (canada), deep
-    // nesting and repeated structure (citm_catalog) and a lot of non-ASCII text (twitter). The small samples add
-    // nothing. The fourth dataset, amazon_cellphones.ndjson, is read line by line (see above).
+    // The benchmark datasets of simdjson, chosen by name:
+    //   - large documents with many numbers (canada)
+    //   - deep nesting and repeated structure (citm_catalog)
+    //   - a lot of non-ASCII text (twitter)
     private static readonly string[] JsonFileNames =
     [
         "canada.json",
@@ -120,6 +122,7 @@ public sealed class YamlSimdjsonRoundTripTest
     public static TheoryData<string> GetJsonFiles()
     {
         var directory = FindDataDirectory();
+
         return new TheoryData<string>(JsonFileNames.Select(name => Path.Combine(directory, name)));
     }
 
@@ -130,7 +133,10 @@ public sealed class YamlSimdjsonRoundTripTest
         {
             var path = Path.Combine(current.FullName, "external", "simdjson-data", "jsonexamples");
             if (Directory.Exists(path))
+            {
                 return path;
+            }
+
             current = current.Parent;
         }
 

@@ -1,5 +1,4 @@
-using System;
-using REDox;
+﻿using System;
 
 namespace REDox.Yaml.Tests;
 
@@ -50,6 +49,19 @@ public sealed partial class YamlSpecConformanceTest
         );
     }
 
+    // YAML 1.2.2 section 5.1 forbids raw NUL in every scalar style; valid UTF-8 alone is insufficient.
+    [Theory]
+    [InlineData("'a\0b'")]
+    [InlineData("a\0b")]
+    [InlineData("|\n  a\0b\n")]
+    [InlineData(">\n  a\0b\n")]
+    public void ValidationRejectsRawNullInScalarSource(string yaml)
+    {
+        var options = new YamlDocumentOptions { EnableValueValidation = true };
+
+        Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse(yaml, options: options));
+    }
+
     [Fact]
     public void ValidationRejectsDuplicateKeys()
     {
@@ -65,12 +77,14 @@ public sealed partial class YamlSpecConformanceTest
     public void MultilineRejectsUnrepresentableControlCharacter()
     {
         var value = DValue.Create("a\rb").AsElement();
+
         Assert.ThrowsAny<NotSupportedException>(() =>
             YamlDocument.EncodeToString(
                 value,
                 new YamlWriteOptions { StringStyle = YamlStringStyle.Multiline }
             )
         );
+
         YamlDocument.EncodeToString(
             value,
             new YamlWriteOptions { StringStyle = YamlStringStyle.Quote }

@@ -1,4 +1,4 @@
-﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -28,6 +28,7 @@ public readonly record struct YamlDocumentOptions
     )
     {
         ArgumentNullException.ThrowIfNull(assumedTimeZone);
+
         AssumedTimeZone = assumedTimeZone;
         PreserveTrivia = preserveTrivia;
         ReadMapKeyAsString = readMapKeyAsString;
@@ -88,7 +89,7 @@ public readonly record struct YamlDocumentOptions
         {
             if (value < -1)
             {
-                throw new ArgumentOutOfRangeException(
+                ThrowHelper.ThrowArgumentOutOfRange(
                     nameof(value),
                     "RootIndentationLevel must be -1 or larger."
                 );

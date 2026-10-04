@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -8,11 +8,6 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
-    private bool IsBlockSequenceIndicator()
-    {
-        return IsBlockSequenceIndicator(_position);
-    }
-
     private bool IsBlockSequenceIndicator(int position)
     {
         return Source[position] == YamlSyntax.Dash
@@ -26,37 +21,61 @@ public sealed partial class YamlDocument
     {
         var arrayId = AllocToken(DToken.MakeArray(0));
         _position++;
+
         SkipTrivia();
         CheckFlowIndent(parentIndent);
+
         while (_position < Source.Length && Source[_position] != YamlSyntax.FlowSequenceEnd)
         {
             if (Source[_position] == YamlSyntax.FlowSeparator)
-                throw Error(ParseException.ErrorCode.InvalidFormat);
+            {
+                ThrowParseError(ParseException.ErrorCode.InvalidFormat);
+            }
+
             if (
                 IsExplicitKeyStart(true)
                 || Source[_position]
                     is not (YamlSyntax.FlowSequenceStart or YamlSyntax.FlowMappingStart)
                     && IsFlowSinglePairStart()
             )
+            {
                 ParseFlowSinglePair(depth + 1, parentIndent);
+            }
             else
+            {
                 ParseNode(depth + 1, true, parentIndent);
+            }
+
             IncToken(arrayId);
             SkipTrivia();
             CheckFlowIndent(parentIndent);
+
             if (_position >= Source.Length)
-                throw Error(ParseException.ErrorCode.InvalidFormat);
+            {
+                ThrowParseError(ParseException.ErrorCode.InvalidFormat);
+            }
+
             if (Source[_position] == YamlSyntax.FlowSequenceEnd)
+            {
                 break;
+            }
+
             if (Source[_position++] != YamlSyntax.FlowSeparator)
-                throw Error(ParseException.ErrorCode.InvalidFormat);
+            {
+                ThrowParseError(ParseException.ErrorCode.InvalidFormat);
+            }
+
             SkipTrivia();
             CheckFlowIndent(parentIndent);
         }
 
         if (_position >= Source.Length || Source[_position++] != YamlSyntax.FlowSequenceEnd)
-            throw Error(ParseException.ErrorCode.InvalidFormat);
+        {
+            ThrowParseError(ParseException.ErrorCode.InvalidFormat);
+        }
+
         CompleteContainer(arrayId);
+
         return arrayId;
     }
 
@@ -64,11 +83,16 @@ public sealed partial class YamlDocument
     {
         var baseIndent = _position - LastLineStart(_position);
         var arrayId = AllocToken(DToken.MakeArray(0));
-        while (_position < Source.Length && IsBlockSequenceIndicator())
+        while (_position < Source.Length && IsBlockSequenceIndicator(_position))
         {
+            RequireAllowedDepth(depth + 1);
+
             _position++;
+
             var separatorStart = _position;
+
             SkipInlineSpaces();
+
             var tabSeparated = Source[separatorStart.._position].Contains(YamlSyntax.Tab);
             if (
                 _position == Source.Length
@@ -77,6 +101,7 @@ public sealed partial class YamlDocument
             )
             {
                 SkipLineRemainder();
+
                 var next = PeekNextContent();
                 if (next.Indent > baseIndent)
                 {
@@ -91,13 +116,15 @@ public sealed partial class YamlDocument
             else
             {
                 // A tab cannot separate the "-" from a nested block collection: its column would be undefined.
-                if (tabSeparated && (IsBlockSequenceIndicator() || IsBlockMapStart()))
+                if (tabSeparated && (IsBlockSequenceIndicator(_position) || IsBlockMapStart()))
                 {
-                    throw Error(ParseException.ErrorCode.InvalidFormat);
+                    ThrowParseError(ParseException.ErrorCode.InvalidFormat);
                 }
 
                 var lineStart = LastLineStart(_position);
+
                 ParseNode(depth + 1, parentIndent: baseIndent);
+
                 if (LastLineStart(_position) == lineStart)
                 {
                     ExpectLineEnd();
@@ -106,44 +133,66 @@ public sealed partial class YamlDocument
 
             IncToken(arrayId);
             SkipTrivia();
+
             var following = PeekNextContent();
             if (following.Indent != baseIndent || following.Position >= Source.Length)
             {
                 break;
             }
+
             _position = following.Position;
+
             if (IndentationContainsTab(_position))
-                throw Error(ParseException.ErrorCode.InvalidFormat);
-            if (!IsBlockSequenceIndicator())
+            {
+                ThrowParseError(ParseException.ErrorCode.InvalidFormat);
+            }
+
+            if (!IsBlockSequenceIndicator(_position))
+            {
                 break;
+            }
         }
 
         CompleteContainer(arrayId);
+
         return arrayId;
     }
 
-    private static void WriteArray(
+    private static bool WriteArray(
         Utf8TextWriter writer,
         in DataReader reader,
         uint arrayId,
         YamlWriteOptions options,
-        int depth
+        int depth,
+        uint followingTokenId
     )
     {
         var count = reader.GetValueCount(arrayId);
         if (count == 0)
         {
             writer.WriteString(YamlSyntax.EmptySequenceUtf8);
-            return;
+
+            return false;
         }
 
         var separatorWritten = false;
-        foreach (var valueId in reader.EnumerateArray(arrayId))
+        var endsWithBlockScalar = false;
+        var values = reader.EnumerateArray(arrayId).GetEnumerator();
+        var hasValue = values.MoveNext();
+        while (hasValue)
         {
+            var valueId = values.Current;
+            hasValue = values.MoveNext();
+
+            var nextTokenId = hasValue ? values.Current : followingTokenId;
             if (separatorWritten)
             {
                 // See WriteMap: the previous entry's line break is deferred so its trailing comment can be added.
-                WriteInlineComment(writer, reader, valueId, options);
+                if (!endsWithBlockScalar)
+                {
+                    WriteInlineComment(writer, reader, valueId, options);
+                }
+
                 writer.WriteIndentNewLine();
             }
 
@@ -155,20 +204,37 @@ public sealed partial class YamlDocument
                 separatorWritten,
                 skipInlineComment: separatorWritten
             );
-            writer.WriteUtf8Byte((byte)YamlSyntax.Dash);
+
+            writer.WriteUtf8Byte(YamlSyntax.Dash);
+
             var value = reader.GetToken(valueId);
+
             writer.PushIndent();
+
             if (value.IsContainer && reader.GetValueCount(valueId) > 0)
             {
                 writer.WriteIndentNewLine();
             }
             else
             {
-                writer.WriteUtf8Byte((byte)YamlSyntax.Space);
+                writer.WriteUtf8Byte(YamlSyntax.Space);
             }
-            WriteNode(writer, reader, valueId, options, depth + 1, false);
+
+            endsWithBlockScalar = WriteNode(
+                writer,
+                reader,
+                valueId,
+                options,
+                depth + 1,
+                false,
+                nextTokenId
+            );
+
             writer.PopIndent();
+
             separatorWritten = true;
         }
+
+        return endsWithBlockScalar;
     }
 }

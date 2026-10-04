@@ -1,11 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Enumeration;
 using System.Linq;
 using System.Text;
-using REDox;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
@@ -17,6 +16,7 @@ internal static class YamlTestHelper
     {
         using var expected = JsonDocument.Parse(expectedJson);
         using var document = YamlDocument.Parse(yaml);
+
         Assert.True(
             DValue.DeepEquals(expected.RootElement.AsValue(), document.RootElement.AsValue()),
             $"Parsing the YAML did not give {expectedJson}. YAML: {yaml}"
@@ -24,6 +24,7 @@ internal static class YamlTestHelper
 
         var written = YamlDocument.EncodeToString(document.RootElement);
         using var reparsed = YamlDocument.Parse(written);
+
         Assert.True(
             DValue.DeepEquals(expected.RootElement.AsValue(), reparsed.RootElement.AsValue()),
             $"Writing and reading the YAML again changed the value. Written: {written}"
@@ -49,6 +50,7 @@ internal static class YamlTestHelper
             json,
             new System.Text.Json.JsonDocumentOptions { MaxDepth = 4096 }
         );
+
         return HasStringValueThatABlockScalarCannotHold(document.RootElement);
     }
 
@@ -62,22 +64,31 @@ internal static class YamlTestHelper
                 foreach (var property in element.EnumerateObject())
                 {
                     if (HasStringValueThatABlockScalarCannotHold(property.Value))
+                    {
                         return true;
+                    }
                 }
 
                 return false;
+
             case System.Text.Json.JsonValueKind.Array:
                 foreach (var item in element.EnumerateArray())
                 {
                     if (HasStringValueThatABlockScalarCannotHold(item))
+                    {
                         return true;
+                    }
                 }
 
                 return false;
+
             case System.Text.Json.JsonValueKind.String:
                 var text = element.GetString();
+
                 Debug.Assert(text != null); // JsonElement.GetString returns null only for a JSON null, and this is a string.
+
                 return text.Any(c => char.IsControl(c) && c != '\n' && c != '\t');
+
             default:
                 return false;
         }
@@ -93,11 +104,6 @@ internal static class YamlTestHelper
         Assert.Equal(DTokenKind.Null, document.RootElement.Token.Kind);
         Assert.Equal("null", JsonDocument.EncodeToString(document.RootElement));
     }
-
-    // Which files of JSONTestSuite a test reads, decided here for every test that uses the suite.
-    //
-    // Files are selected by exclusion: every JSON file of the suite is used unless its name matches a pattern below,
-    // so a file added to the suite is covered without a change here.
 
     // "n_*": JSON that a parser must reject. The JSON reader of the core validates lazily, so it rejects such a file
     // either when it reads it or when a value is first taken out of the document, which is while the YAML is written.
@@ -135,7 +141,10 @@ internal static class YamlTestHelper
         {
             var path = Path.Combine(current.FullName, "external", "JSONTestSuite");
             if (Directory.Exists(Path.Combine(path, "test_parsing")))
+            {
                 return path;
+            }
+
             current = current.Parent;
         }
 
@@ -145,6 +154,7 @@ internal static class YamlTestHelper
     private static IEnumerable<string> GetJsonSuiteAllFiles()
     {
         var suite = FindJsonSuiteDirectory();
+
         return JsonSuiteTestDirectories
             .SelectMany(directory =>
                 Directory.EnumerateFiles(Path.Combine(suite, directory), "*.json")
@@ -156,6 +166,23 @@ internal static class YamlTestHelper
     {
         return FileSystemName.MatchesSimpleExpression(pattern, Path.GetFileName(path));
     }
+}
+
+internal static class TestExtensions
+{
+    public static string? AsString(this DValue value) => (string?)value;
+
+    public static long AsInt64(this DValue value) => (long)value;
+
+    public static ulong AsUInt64(this DValue value) => (ulong)value;
+
+    public static double AsDouble(this DValue value) => (double)value;
+
+    public static bool AsBoolean(this DValue value) => (bool)value;
+
+    public static DateTimeOffset AsDateTimeOffset(this DValue value) => (DateTimeOffset)value;
+
+    public static DTokenKind AsTokenKind(this DValue value) => value.AsElement().Token.Kind;
 }
 
 public sealed class YamlTestHelperTest

@@ -1,15 +1,14 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using REDox;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
 public sealed class YamlSerializerTest
 {
-    // The datasets of the benchmarks (REDox.Benchmarks.Data).
     private static readonly string[] JsonFileNames =
     [
         "twitter.json",
@@ -29,6 +28,7 @@ public sealed class YamlSerializerTest
     public static TheoryData<string> GetJsonFiles()
     {
         var directory = YamlSimdjsonRoundTripTest.FindDataDirectory();
+
         return new TheoryData<string>(JsonFileNames.Select(name => Path.Combine(directory, name)));
     }
 
@@ -52,6 +52,7 @@ public sealed class YamlSerializerTest
                 Assert.Throws<NotSupportedException>(() =>
                     YamlSerializer.Serialize(source.RootElement, options: options)
                 );
+
                 continue;
             }
 
@@ -64,5 +65,20 @@ public sealed class YamlSerializerTest
                 $"The serializer wrote {Path.GetFileName(filePath)} differently from the document writer in {style} mode."
             );
         }
+    }
+
+    // A float is the one value that is not written the same as the document writer writes it: the serializer writes its
+    // own shortest text, and the document writer writes the double that it widens to (not 0.1 for 0.1f).
+    [Fact]
+    public void SingleIsNotWrittenAsTheDocumentWriterWritesIt()
+    {
+        var options = new YamlWriteOptions { NewLine = "\n" };
+        var map = new Dictionary<string, float> { ["a"] = 0.1f };
+
+        var direct = Encoding.UTF8.GetString(YamlSerializer.Serialize(map, options: options));
+        var viaDocument = YamlDocument.EncodeToString(DValue.From(map).AsElement(), options);
+
+        Assert.Equal("a: 0.1\n", direct);
+        Assert.NotEqual("a: 0.1\n", viaDocument);
     }
 }

@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
-using REDox;
 
 namespace REDox.Yaml.Tests;
 
@@ -9,11 +8,8 @@ public sealed partial class YamlTimestampTest
     // The local time zone of the test process. A test must not pass because the machine it runs on happens to be in
     // the zone the test expects, so the local zone is set to UTC-12 ("Etc/GMT+12"), the middle of the Pacific, west of
     // the date line. Only uninhabited islands (Baker and Howland Islands) keep that time, so it is the zone of no
-    // country, and no developer machine, CI runner or locale (UTC, Japan, the US, Europe, ...) is in it. A test that
-    // wrongly follows the local zone, instead of the zone the library is told to use, then fails everywhere. (This is
-    // not hypothetical: a test that expected UTC+9 passed only on a machine in Japan, and hid that the zone was
-    // ignored.) The "TZ" environment variable sets it on Linux and macOS; Windows ignores the variable and a process
-    // cannot change its local time zone there, which LocalZoneIsMidPacific tells the tests that depend on it.
+    // country, and no developer machine, CI runner or locale (UTC, Japan, the US, Europe, ...) is in it.
+    // A test that wrongly follows the local zone, instead of the zone the library is told to use, then fails everywhere.
     private const string LocalZoneId = "Etc/GMT+12";
 
     // UTC-12, the same offset as the local zone.
@@ -47,7 +43,7 @@ public sealed partial class YamlTimestampTest
         TimeZoneInfo.ClearCachedData();
     }
 
-    private static YamlDocumentOptions In(TimeZoneInfo zone) =>
+    private static YamlDocumentOptions WithTimeZone(TimeZoneInfo zone) =>
         new YamlDocumentOptions { AssumedTimeZone = zone };
 
     [Fact]
@@ -73,6 +69,7 @@ public sealed partial class YamlTimestampTest
         var value = document.RootElement.GetDateTimeOffset();
 
         Assert.Equal(TimeSpan.Zero, value.Offset);
+
         if (LocalZoneIsMidPacific)
         {
             Assert.NotEqual(TimeZoneInfo.Local.GetUtcOffset(value), value.Offset);
@@ -97,7 +94,7 @@ public sealed partial class YamlTimestampTest
     {
         foreach (var zone in new[] { MidPacific, FarPacificEast, TimeZoneInfo.Utc })
         {
-            using var document = YamlDocument.Parse(yaml, options: In(zone));
+            using var document = YamlDocument.Parse(yaml, options: WithTimeZone(zone));
 
             var value = document.RootElement.GetDateTimeOffset();
 
@@ -112,8 +109,8 @@ public sealed partial class YamlTimestampTest
     public void TheSameTextIsADifferentInstantInEachZone()
     {
         const string yaml = "2001-12-14 21:59:43";
-        using var inMidPacific = YamlDocument.Parse(yaml, options: In(MidPacific));
-        using var inFarEast = YamlDocument.Parse(yaml, options: In(FarPacificEast));
+        using var inMidPacific = YamlDocument.Parse(yaml, options: WithTimeZone(MidPacific));
+        using var inFarEast = YamlDocument.Parse(yaml, options: WithTimeZone(FarPacificEast));
 
         var west = inMidPacific.RootElement.GetDateTimeOffset();
         var east = inFarEast.RootElement.GetDateTimeOffset();
@@ -135,7 +132,7 @@ public sealed partial class YamlTimestampTest
     {
         foreach (var zone in new[] { MidPacific, FarPacificEast, TimeZoneInfo.Utc })
         {
-            using var document = YamlDocument.Parse(yaml, options: In(zone));
+            using var document = YamlDocument.Parse(yaml, options: WithTimeZone(zone));
 
             Assert.Equal(
                 TimeSpan.FromMinutes(offsetMinutes),
@@ -152,7 +149,7 @@ public sealed partial class YamlTimestampTest
         var clock = new DateTime(2001, 12, 14, 21, 59, 43);
 
         using var inUtc = YamlDocument.Parse(yaml);
-        using var inMidPacific = YamlDocument.Parse(yaml, options: In(MidPacific));
+        using var inMidPacific = YamlDocument.Parse(yaml, options: WithTimeZone(MidPacific));
 
         Assert.Equal(clock, inUtc.RootElement.GetDateTime());
         Assert.Equal(DateTimeKind.Utc, inUtc.RootElement.GetDateTime().Kind);
@@ -168,7 +165,7 @@ public sealed partial class YamlTimestampTest
     [InlineData("2001-12-14T21:59:43+14:00")]
     public void DateTimeOfATimestampWithOffsetIsTheClockAsWritten(string yaml)
     {
-        using var document = YamlDocument.Parse(yaml, options: In(MidPacific));
+        using var document = YamlDocument.Parse(yaml, options: WithTimeZone(MidPacific));
 
         var value = document.RootElement.GetDateTime();
 
@@ -185,16 +182,18 @@ public sealed partial class YamlTimestampTest
         var yaml = "when: " + timestamp + "\n";
         foreach (var zone in new[] { MidPacific, FarPacificEast, TimeZoneInfo.Utc })
         {
-            using var document = YamlDocument.Parse(yaml, options: In(zone));
+            using var document = YamlDocument.Parse(yaml, options: WithTimeZone(zone));
 
             // Reading the value does not touch the text either.
             var offset = document.RootElement.GetProperty("when").GetDateTimeOffset().Offset;
+
             Assert.Equal(hasOffset ? TimeSpan.FromHours(-5) : zone.BaseUtcOffset, offset);
 
             var written = YamlDocument.EncodeToString(
                 document.RootElement,
                 new YamlWriteOptions { NewLine = "\n" }
             );
+
             Assert.Equal(yaml, written);
         }
     }
@@ -211,8 +210,10 @@ public sealed partial class YamlTimestampTest
 
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
-        using var parsed = YamlDocument.Parse(yaml, options: In(MidPacific));
+        using var parsed = YamlDocument.Parse(yaml, options: WithTimeZone(MidPacific));
+
         var restored = parsed.RootElement.GetDateTimeOffset();
+
         Assert.Equal(value, restored);
         Assert.Equal(value.Offset, restored.Offset);
     }

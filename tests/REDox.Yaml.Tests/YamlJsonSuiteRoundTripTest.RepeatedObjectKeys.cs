@@ -1,5 +1,4 @@
-using System.Collections.Generic;
-using System.IO;
+﻿using System.IO;
 using System.Linq;
 using REDox.Json;
 
@@ -21,19 +20,23 @@ public sealed partial class YamlJsonSuiteRoundTripTest
     public void DuplicateJsonKeysRoundTripWithValidationDisabled(string filePath)
     {
         using var source = JsonDocument.Parse(File.ReadAllBytes(filePath));
+
         foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
             var yaml = YamlDocument.EncodeToString(
                 source.RootElement,
                 new YamlWriteOptions { StringStyle = mode }
             );
+
             // JSON permits repeated member names; disable YAML key validation to retain every entry.
             using var parsed = YamlDocument.Parse(
                 yaml,
                 options: new YamlDocumentOptions { EnableValueValidation = false }
             );
+
             var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);
             using var restored = JsonDocument.Parse(restoredJson);
+
             // DeepEquals looks up map values by key, so it cannot compare repeated keys entry by entry.
             // Compare both public JSON outputs to preserve every repeated key and its position.
             Assert.Equal(
@@ -46,6 +49,7 @@ public sealed partial class YamlJsonSuiteRoundTripTest
     public static TheoryData<string> GetDuplicateKeyFiles()
     {
         var suite = FindSuiteDirectory();
+
         return new TheoryData<string>(
             DuplicateKeyCasesWithValidationDisabled.Select(path =>
                 Path.Combine(suite, path.Replace('/', Path.DirectorySeparatorChar))

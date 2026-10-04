@@ -1,8 +1,6 @@
-using System;
-using System.Collections.Generic;
+﻿using System;
 using System.IO;
 using System.Linq;
-using REDox;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
@@ -29,13 +27,16 @@ public sealed partial class YamlJsonSuiteRoundTripTest
             catch (NotSupportedException) when (mode == YamlStringStyle.Multiline)
             {
                 YamlTestHelper.AssertMultilineRefusalIsJustified(bytes, Path.GetFileName(filePath));
+
                 continue;
             }
 
             using var parsed = YamlDocument.Parse(yaml);
+
             // Exercise the public JSON writer and parser after YAML decoding to cover the full conversion path.
             var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);
             using var restored = JsonDocument.Parse(restoredJson);
+
             Assert.True(
                 DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
                 $"YAML round-trip changed {Path.GetFileName(filePath)} in {mode} mode."
@@ -51,15 +52,19 @@ public sealed partial class YamlJsonSuiteRoundTripTest
     public void NumericJsonRoundTripsThroughPublicFormats(string json)
     {
         using var source = JsonDocument.Parse(json);
+
         foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
             var yaml = YamlDocument.EncodeToString(
                 source.RootElement,
                 new YamlWriteOptions { StringStyle = mode }
             );
+
             using var parsed = YamlDocument.Parse(yaml);
+
             var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);
             using var restored = JsonDocument.Parse(restoredJson);
+
             Assert.True(
                 DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
                 $"YAML round-trip changed {json} in {mode} mode."
@@ -70,6 +75,7 @@ public sealed partial class YamlJsonSuiteRoundTripTest
     public static TheoryData<string> GetValidJsonFiles()
     {
         var suite = FindSuiteDirectory();
+
         return new TheoryData<string>(
             YamlTestHelper
                 .GetJsonSuiteValidFiles()

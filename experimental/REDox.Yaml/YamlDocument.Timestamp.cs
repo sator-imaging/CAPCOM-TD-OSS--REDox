@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -11,23 +11,23 @@ public sealed partial class YamlDocument
 {
     private TimeZoneInfo AssumedTimeZone => _parseOptions.AssumedTimeZone ?? TimeZoneInfo.Utc;
 
-    // A timestamp starts with a year of four digits and a dash ("2001-12-14"). Only a text that does is turned into a
-    // string for the pattern that decides the rest, so no other plain scalar costs a string.
     private static bool StartsLikeTimestamp(ReadOnlySpan<byte> text)
     {
         return text.Length >= 8
-            && char.IsAsciiDigit((char)text[0])
-            && char.IsAsciiDigit((char)text[1])
-            && char.IsAsciiDigit((char)text[2])
-            && char.IsAsciiDigit((char)text[3])
-            && text[4] == YamlSyntax.Dash;
+            && text[4] == YamlSyntax.Dash
+            && YamlSyntax.IsAsciiDigit(text[3])
+            && YamlSyntax.IsAsciiDigit(text[2])
+            && YamlSyntax.IsAsciiDigit(text[1])
+            && YamlSyntax.IsAsciiDigit(text[0]);
     }
 
-    // Whether a plain value is a timestamp is decided by YamlTimestampHelper. The text is stored exactly as it was
-    // written (see WriteTimestamp), so nothing is normalized when the document is read.
+    // Whether a plain value is a timestamp is decided by YamlTimestampHelper.
+    // The text is stored exactly as it was written (see WriteTimestamp),
+    // so nothing is normalized when the document is read.
     private bool TryParseTimestamp(ParsedScalar scalar, out uint tokenId)
     {
         tokenId = 0;
+
         var text = ScalarText(scalar);
         if (
             !StartsLikeTimestamp(text)
@@ -44,7 +44,7 @@ public sealed partial class YamlDocument
             _ => DTokenVariant.TimestampOffsetDateTime,
         };
 
-        // The core reads a timestamp without an offset through DateTime and then converts it to a DateTimeOffset, which
+        // Core reads a timestamp without an offset through DateTime and then converts it to a DateTimeOffset, which
         // can only apply UTC (a Utc DateTime) or the local zone of the machine. A zone given in the options would be
         // ignored, so such a timestamp is stored as an offset timestamp and read through DecodeDateTimeOffset, which
         // applies the zone. The text, and so what is written, is the same either way.
@@ -54,6 +54,7 @@ public sealed partial class YamlDocument
         }
 
         tokenId = CommitScalar(variant, scalar);
+
         return true;
     }
 
@@ -79,19 +80,19 @@ public sealed partial class YamlDocument
     {
         var token = reader.GetToken(tokenId);
 
-        // A timestamp that was read from YAML and not edited is written back exactly as it was written: the text
-        // is never reformatted.
         if (reader.Document is YamlDocument document && !token.IsExtended)
         {
             writer.WriteString(document.ScalarBytes(token));
+
             return;
         }
 
-        // A value of another format (or an edited value) has no YAML text to keep. Core's own timestamp writer
-        // produces its text, so no format is defined here.
+        // A value of another format (or an edited value) has no YAML text to keep.
+        // Core's own timestamp writer produces its text, so no format is defined here.
         if (token.Variant == DTokenVariant.TimestampOffsetDateTime)
         {
             writer.WriteTimestamp(reader.ReadDateTimeOffset(tokenId));
+
             return;
         }
 

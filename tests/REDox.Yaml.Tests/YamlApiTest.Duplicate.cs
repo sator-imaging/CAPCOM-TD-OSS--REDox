@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Linq;
-using REDox;
 
 namespace REDox.Yaml.Tests;
 
@@ -35,6 +34,7 @@ public sealed partial class YamlApiTest
         using var duplicate = original.Duplicate();
 
         original.Dispose();
+
         // Another document takes the buffer that the original returned, and writes over it.
         using var other = YamlDocument.Parse(
             "name: 0123456789\nnumber: 0123456789\nlist: [0123456789, 0123456789, 0123456789]\n"
@@ -50,18 +50,22 @@ public sealed partial class YamlApiTest
             new DateTimeOffset(2001, 12, 14, 0, 0, 0, TimeSpan.Zero),
             duplicate.RootElement.GetProperty("when").GetDateTimeOffset()
         );
+
         Assert.Equal(
             1,
             duplicate.RootElement.GetProperty("list").AsArray()[0].AsElement().GetInt64()
         );
+
         Assert.Equal(
             "two",
             duplicate.RootElement.GetProperty("list").AsArray()[1].AsElement().GetString()
         );
+
         Assert.Equal(
             "value",
             duplicate.RootElement.GetProperty("nested").GetProperty("key").GetString()
         );
+
         Assert.Equal("one\ntwo\n", duplicate.RootElement.GetProperty("block").GetString());
     }
 
@@ -71,6 +75,7 @@ public sealed partial class YamlApiTest
         var original = YamlDocument.Parse(
             "1: integer\ntrue: boolean\n2001-12-14: date\ntext: string\n"
         );
+
         using var duplicate = original.Duplicate();
 
         original.Dispose();
@@ -85,6 +90,7 @@ public sealed partial class YamlApiTest
             },
             duplicate.RootElement.AsMap().Select(pair => pair.Key.AsElement().Token.Kind)
         );
+
         Assert.Equal(
             new[] { "integer", "boolean", "date", "string" },
             duplicate.RootElement.AsMap().Select(pair => pair.Value.AsElement().GetString())
@@ -95,6 +101,7 @@ public sealed partial class YamlApiTest
     public void DisposingTheDuplicateLeavesTheOriginalAlone()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
+
         var expected = TextOf(original);
         var duplicate = original.Duplicate();
 
@@ -121,6 +128,7 @@ public sealed partial class YamlApiTest
     public void RemovingFromTheDuplicateLeavesTheOriginalAlone()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
+
         var expected = TextOf(original);
         using var duplicate = original.Duplicate();
 
@@ -137,6 +145,7 @@ public sealed partial class YamlApiTest
     public void ReplacingListItemsInTheDuplicateLeavesTheOriginalAlone()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
+
         var expected = TextOf(original);
         using var duplicate = original.Duplicate();
 
@@ -153,10 +162,12 @@ public sealed partial class YamlApiTest
     public void EditingNestedValuesOfTheDuplicateLeavesTheOriginalAlone()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
+
         var expected = TextOf(original);
         using var duplicate = original.Duplicate();
 
         duplicate.RootElement.GetProperty("nested").AsObject()["key"] = DValue.Create("changed");
+
         duplicate.RootElement.GetProperty("nested").AsObject().Add("added", DValue.Create(true));
         duplicate
             .RootElement.GetProperty("nested")
@@ -175,16 +186,19 @@ public sealed partial class YamlApiTest
     public void EditingNestedValuesOfTheOriginalLeavesTheDuplicateAlone()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
+
         var expected = TextOf(original);
         using var duplicate = original.Duplicate();
 
         original.RootElement.GetProperty("nested").AsObject()["key"] = DValue.Create("changed");
+
         original.RootElement.GetProperty("nested").AsObject().Add("added", DValue.Create(true));
         original
             .RootElement.GetProperty("nested")
             .GetProperty("deep")
             .AsArray()
             .Add(DValue.Create(7));
+
         original.RootElement.GetProperty("list").AsArray().RemoveAt(0);
 
         Assert.Equal(expected, TextOf(duplicate));

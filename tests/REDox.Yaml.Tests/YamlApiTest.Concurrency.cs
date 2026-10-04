@@ -1,15 +1,12 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using REDox;
 using REDox.Serialization;
 
 namespace REDox.Yaml.Tests;
 
 public sealed partial class YamlApiTest
 {
-    // Concurrency: the encoders and the word sets are static and shared by every document.
-
     [Fact]
     public void ParseAndEncodeInParallelGiveTheSameResultAsOneThread()
     {
@@ -56,7 +53,9 @@ public sealed partial class YamlApiTest
                             DValue.Create(value).AsElement(),
                             Options
                         );
+
                         using var parsed = YamlDocument.Parse(yaml);
+
                         Assert.Equal(value, parsed.RootElement.GetString());
                     }
                 })
@@ -68,11 +67,10 @@ public sealed partial class YamlApiTest
     private static string SingleThreaded()
     {
         using var document = YamlDocument.Parse(Sample);
+
         return YamlDocument.EncodeToString(document.RootElement, Options);
     }
 
-    // The same document, read by many threads at once: nothing is written to it after it is parsed, so every thread
-    // sees every value.
     [Fact]
     public void OneDocumentReadByManyThreadsGivesTheSameValues()
     {
@@ -92,20 +90,22 @@ public sealed partial class YamlApiTest
                     "two",
                     document.RootElement.GetProperty("list").AsArray()[1].AsElement().GetString()
                 );
+
                 Assert.Equal(
                     "value",
                     document.RootElement.GetProperty("nested").GetProperty("key").GetString()
                 );
+
                 Assert.Equal("one\ntwo\n", document.RootElement.GetProperty("block").GetString());
             }
         );
     }
 
-    // The same element, written by many threads at once.
     [Fact]
     public void OneElementWrittenByManyThreadsGivesTheSameText()
     {
         using var document = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
+
         var expected = TextOf(document);
 
         var texts = Enumerable
@@ -119,8 +119,6 @@ public sealed partial class YamlApiTest
         Assert.Equal(new[] { expected }, texts);
     }
 
-    // The automatic parallel deserialization of the README: the elements of a large array are made into objects by
-    // many threads, which all read the one document. The result is the same as the sequential one.
     [Fact]
     public void ParallelDeserializationOfOneDocumentGivesTheSequentialResult()
     {
@@ -135,10 +133,11 @@ public sealed partial class YamlApiTest
                 Optional = index % 3 == 0 ? index : null,
                 Favorite = index % 2 == 0 ? Color.Green : Color.Red,
                 Address = new Address { City = $"city {index}", Number = index },
-                Tags = new List<string> { $"tag{index}", "123", "" },
+                Tags = [$"tag{index}", "123", ""],
                 Counts = new Dictionary<string, int> { ["a"] = index, ["b"] = -index },
             })
             .ToArray();
+
         var yaml = YamlDocument.EncodeToString(DValue.From(persons).AsElement());
         var parallel = new DoxSerializerSettings
         {
@@ -147,10 +146,12 @@ public sealed partial class YamlApiTest
 
         using var sequentialDocument = YamlDocument.Parse(yaml);
         using var parallelDocument = YamlDocument.Parse(yaml, parallel);
+
         var sequentialResult = ToObject<Person[]>(sequentialDocument.RootElement);
         var parallelResult = ToObject<Person[]>(parallelDocument.RootElement);
 
         Assert.Equal(persons.Length, parallelResult.Length);
+
         for (var index = 0; index < persons.Length; index++)
         {
             AssertSamePerson(persons[index], parallelResult[index]);

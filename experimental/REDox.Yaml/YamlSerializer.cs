@@ -24,12 +24,13 @@ public sealed class YamlSerializer : Serializer
     {
         settings ??= SerializerSettings.Default;
 
-        using (var cache = Helper.InstanceCache<YamlWriter>.Get(() => new YamlWriter()))
-        {
-            var writer = cache.Value;
-            writer.Reset(settings, options);
-            writer.WriteValue(value);
-            return writer.Encode();
-        }
+        using var cache = Helper.InstanceCache<YamlWriter>.Get(() => new YamlWriter());
+
+        var writer = cache.Value;
+
+        writer.Reset(settings, options);
+        writer.WriteValue(value);
+
+        return writer.Encode();
     }
 }

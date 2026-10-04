@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -7,11 +7,11 @@ namespace REDox.Yaml;
 
 internal static class TextEncodingDetector
 {
-    private static readonly byte[] Utf8Bom = new byte[] { 0xef, 0xbb, 0xbf };
-    private static readonly byte[] Utf32LittleEndianBom = new byte[] { 0xff, 0xfe, 0x00, 0x00 };
-    private static readonly byte[] Utf32BigEndianBom = new byte[] { 0x00, 0x00, 0xfe, 0xff };
-    private static readonly byte[] Utf16LittleEndianBom = new byte[] { 0xff, 0xfe };
-    private static readonly byte[] Utf16BigEndianBom = new byte[] { 0xfe, 0xff };
+    private static readonly byte[] Utf8Bom = [0xef, 0xbb, 0xbf];
+    private static readonly byte[] Utf32LittleEndianBom = [0xff, 0xfe, 0x00, 0x00];
+    private static readonly byte[] Utf32BigEndianBom = [0x00, 0x00, 0xfe, 0xff];
+    private static readonly byte[] Utf16LittleEndianBom = [0xff, 0xfe];
+    private static readonly byte[] Utf16BigEndianBom = [0xfe, 0xff];
 
     /// <summary>
     /// Detects the encoding from a leading byte order mark only.
@@ -56,6 +56,7 @@ internal static class TextEncodingDetector
         {
             kind = default;
             skipBytes = 0;
+
             return false;
         }
 
