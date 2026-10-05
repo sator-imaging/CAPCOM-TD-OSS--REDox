@@ -9,9 +9,9 @@ public sealed partial class YamlDocument
 
     private bool TryParseNull(ParsedScalar scalar, out uint tokenId)
     {
-        if (YamlSyntax.IsNullScalar(ScalarText(scalar)))
+        if (YamlSyntax.IsNullScalar(_scalars.GetWrittenSpanFromOffset(scalar.Start)))
         {
-            DiscardScalar(scalar);
+            _scalars.TruncateTo(scalar.Start);
 
             tokenId = ParseNull();
 

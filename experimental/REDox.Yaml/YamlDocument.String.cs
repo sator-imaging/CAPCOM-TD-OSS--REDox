@@ -197,7 +197,7 @@ public sealed partial class YamlDocument
                         codePoint = 0x10000 + ((codePoint - 0xd800) << 10) + low - 0xdc00;
                     }
                     // Eight hexadecimal digits can parse as a negative int; reject them before constructing a Rune.
-                    else if (codePoint is >= 0xdc00 and <= 0xdfff || codePoint is < 0 or > 0x10ffff)
+                    else if (codePoint is >= 0xdc00 and <= 0xdfff or < 0 or > 0x10ffff)
                     {
                         ThrowParseError(ParseException.ErrorCode.InvalidString);
                     }
@@ -368,20 +368,17 @@ public sealed partial class YamlDocument
     private bool IsFlowTokenAt(int position)
     {
         var current = Source[position];
-        if (YamlSyntax.IsFlowIndicator(current))
-        {
-            return true;
-        }
 
-        return current == YamlSyntax.MappingValueIndicator
-            && (
-                position + 1 == Source.Length
-                || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position + 1])
-                || Source[position + 1]
-                    is YamlSyntax.FlowSeparator
-                        or YamlSyntax.FlowSequenceEnd
-                        or YamlSyntax.FlowMappingEnd
-            );
+        return YamlSyntax.IsFlowIndicator(current)
+            || current == YamlSyntax.MappingValueIndicator
+                && (
+                    position + 1 == Source.Length
+                    || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position + 1])
+                    || Source[position + 1]
+                        is YamlSyntax.FlowSeparator
+                            or YamlSyntax.FlowSequenceEnd
+                            or YamlSyntax.FlowMappingEnd
+                );
     }
 
     // TODO: Optimize
@@ -822,7 +819,7 @@ public sealed partial class YamlDocument
     /// <inheritdoc />
     protected override ReadOnlySpan<byte> DecodeUtf8Bytes(DToken token)
     {
-        return ScalarBytes(token);
+        return GetStoredScalarBytes(token);
     }
 
     // Binary data (a byte string, a Guid) has no YAML form without the !!binary tag.
@@ -840,12 +837,15 @@ public sealed partial class YamlDocument
     )
     {
         var kind = reader.GetToken(tokenId).ByteStringKind;
-        var text = ByteStringText(reader.ReadByteString(tokenId), kind);
+        var text = EncodeByteStringAsYamlText(reader.ReadByteString(tokenId), kind);
 
         WriteStringValue(writer, text, options, depth, key, commentWhitespace, commentText);
     }
 
-    internal static ReadOnlySpan<byte> ByteStringText(ReadOnlySpan<byte> bytes, ByteStringKind kind)
+    internal static ReadOnlySpan<byte> EncodeByteStringAsYamlText(
+        ReadOnlySpan<byte> bytes,
+        ByteStringKind kind
+    )
     {
         var encodeKind = kind is ByteStringKind.Raw or ByteStringKind.Inherit
             ? ByteStringKind.Default
@@ -912,14 +912,18 @@ public sealed partial class YamlDocument
         // TODO: Add a Mixed string mode when callers need quoted single-line values.
         if (options.IndentSize < 1)
         {
-            ThrowHelper.ThrowNotSupported(
+            ThrowGenericError(
+                ParseException.ErrorCode.InvalidOption,
                 "YAML block scalars require an indentation of at least 1 space."
             );
         }
 
         if (YamlSyntax.ContainsUnrepresentableBlockScalarCharacters(value))
         {
-            ThrowHelper.ThrowNotSupported("This string cannot be written as a YAML block scalar.");
+            ThrowGenericError(
+                ParseException.ErrorCode.UnsupportedFeature,
+                "This string cannot be written as a YAML block scalar."
+            );
         }
 
         var trailingNewlines = value.Length - value.TrimEnd(YamlSyntax.LineFeed).Length;
@@ -948,7 +952,8 @@ public sealed partial class YamlDocument
             // An explicit indent keeps leading spaces in the value instead of treating them as indentation.
             if (options.IndentSize > 9)
             {
-                ThrowHelper.ThrowNotSupported(
+                ThrowGenericError(
+                    ParseException.ErrorCode.UnsupportedFeature,
                     "Leading whitespace requires a YAML indentation indicator of 1 to 9."
                 );
             }

@@ -5,9 +5,10 @@ namespace REDox.Yaml.Tests;
 public sealed class YamlTriviaTest
 {
     [Fact]
-    public void CommentIsPreservedWhenRequested()
+    public void RequestedCommentPreservation_KeepsComments()
     {
         const string yaml = "# first\na: 1\n# second\nb: 2\n";
+
         using var document = YamlDocument.Parse(
             yaml,
             options: new YamlDocumentOptions { PreserveTrivia = true }
@@ -27,7 +28,7 @@ public sealed class YamlTriviaTest
     [InlineData("list:\n  # head\n  - 1\n  - 2 # two\n", "# head")]
     [InlineData("list:\n  # head\n  - 1\n  - 2 # two\n", "# two")]
     [InlineData("[1, # one\n 2]\n", "# one")]
-    public void NestedAndTrailingCommentsAreKept(string yaml, string comment)
+    public void NestedAndTrailingComments_RemainInOutput(string yaml, string comment)
     {
         using var document = YamlDocument.Parse(
             yaml,
@@ -53,7 +54,7 @@ public sealed class YamlTriviaTest
     [InlineData("a:\n  b: 1    # inner\n  c: 2\n")]
     [InlineData("some       # comment\n")]
     [InlineData("list:\n  - x      # x\n  - z\t\t# z\n")]
-    public void SpacesBeforeATrailingCommentAreKept(string yaml)
+    public void SpacesBeforeTrailingComment_RemainInOutput(string yaml)
     {
         using var document = YamlDocument.Parse(
             yaml,
@@ -69,7 +70,7 @@ public sealed class YamlTriviaTest
     }
 
     [Fact]
-    public void TrailingCommentStaysOnItsLine()
+    public void TrailingComment_StaysOnItsLine()
     {
         using var document = YamlDocument.Parse(
             "a: 1 # note\nb: 2\n",
@@ -97,9 +98,10 @@ public sealed class YamlTriviaTest
     [InlineData("\"text\\n\" # note\n")]
     [InlineData("\"text\\n\\n\" # note\n")]
     [InlineData("\"first\\nsecond\" # note\n")]
-    public void MultilineOutputKeepsTrailingCommentsOutsideStringValues(string yaml)
+    public void MultilineOutput_KeepsTrailingCommentsOutsideStringValues(string yaml)
     {
         var parseOptions = new YamlDocumentOptions { PreserveTrivia = true };
+
         using var document = YamlDocument.Parse(yaml, options: parseOptions);
 
         var encoded = YamlDocument.EncodeToString(
@@ -134,10 +136,11 @@ public sealed class YamlTriviaTest
     [InlineData("- 1 # one\n- 2 # two\n", "- 1 # one\n- 2 # two\n")]
     [InlineData("1:\n  2: 3 # inner\n4: 5\n", "1:\n  2: 3 # inner\n4: 5\n")]
     [InlineData("1:\n  # head\n  - 2\n", "1:\n  # head\n  - 2\n")]
-    // A comment on the key's line moves to its own line below it: Core cannot attach it to the key.
+    // A comment on the key's line moves to its own line below it.
+    // Core data model cannot attach it to the key.
     [InlineData("1: # key\n  - 2\n", "1:\n  # key\n  - 2\n")]
     [InlineData("# top\n1: 2\n\n# bottom\n", "# top\n1: 2\n\n# bottom\n")]
-    public void CommentPositionsRoundTrip(string yaml, string expected)
+    public void CommentPositions_RoundTrip(string yaml, string expected)
     {
         using var document = YamlDocument.Parse(
             yaml,
@@ -153,9 +156,10 @@ public sealed class YamlTriviaTest
     }
 
     [Fact]
-    public void HashInsideStringsIsNotAComment()
+    public void HashInsideStrings_RemainsStringContent()
     {
         const string yaml = "a: |\n  x # not a comment\n  y\nb: \"c # d\"\nc: 'e #f'\n";
+
         using var document = YamlDocument.Parse(
             yaml,
             options: new YamlDocumentOptions { PreserveTrivia = true }
@@ -178,25 +182,25 @@ public sealed class YamlTriviaTest
     [InlineData("# only a comment\n")]
     [InlineData("# first\n\n# second\n")]
     [InlineData("  # indented\n   \n\n")]
-    public void CommentsOfAnInputWithoutContentAreKept(string yaml)
+    public void CommentOnlyInput_PreservesCommentsAsTriviaAndNullRootAfterRoundTrip(string yaml)
     {
         using var document = YamlDocument.Parse(
             yaml,
             options: new YamlDocumentOptions { PreserveTrivia = true }
         );
 
-        // The root is the null that stands in for the missing content, and it carries the comments.
+        // Core has no empty-document value, so the null root owns the comments.
         Assert.Equal(DTokenKind.Null, document.RootElement.Token.Kind);
 
         var comments = document
             .RootElement.EnumerateTrivia()
-            .Where(trivia => trivia.Kind == TriviaKind.LineComment)
-            .Select(trivia => trivia.GetString())
+            .Where(static trivia => trivia.Kind == TriviaKind.LineComment)
+            .Select(static trivia => trivia.GetString())
             .ToArray();
 
         var expected = yaml.Split('\n')
-            .Select(line => line.Trim())
-            .Where(line => line.StartsWith('#'))
+            .Select(static line => line.Trim())
+            .Where(static line => line.StartsWith('#'))
             .ToArray();
 
         Assert.Equal(expected, comments);
@@ -211,14 +215,13 @@ public sealed class YamlTriviaTest
             Assert.Contains(comment, encoded);
         }
 
-        // Written back, the comments must still be read as comments only.
         using var reparsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(DTokenKind.Null, reparsed.RootElement.Token.Kind);
     }
 
     [Fact]
-    public void BlankLineIsPreservedWhenRequested()
+    public void RequestedTriviaPreservation_KeepsBlankLine()
     {
         using var document = YamlDocument.Parse(
             "a: 1\n\nb: 2\n",

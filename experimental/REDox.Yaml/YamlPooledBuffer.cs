@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -56,7 +56,8 @@ internal sealed class YamlPooledBuffer : IBufferWriter<byte>, IDisposable
 
     public byte this[int index] => _buffer[index];
 
-    public ReadOnlySpan<byte> From(int offset) => _buffer.AsSpan(offset, _length - offset);
+    public ReadOnlySpan<byte> GetWrittenSpanFromOffset(int offset) =>
+        _buffer.AsSpan(offset, _length - offset);
 
     public ReadOnlySpan<byte> Slice(int offset, int length) => _buffer.AsSpan(offset, length);
 

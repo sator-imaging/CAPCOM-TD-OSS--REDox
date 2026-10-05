@@ -242,7 +242,7 @@ public sealed partial class YamlDocument
         hexadecimal ? YamlSyntax.IsAsciiHexDigit(value) : YamlSyntax.IsAsciiDigit(value);
 
     // The text of a number that was read with underscores, without them. It was checked when it was read.
-    private static byte[] WithoutDigitSeparators(ReadOnlySpan<byte> text)
+    private static byte[] RemoveDigitSeparators(ReadOnlySpan<byte> text)
     {
         var cleaned = new byte[text.Length];
         var valid = TryRemoveDigitSeparators(text, cleaned, out var length);
@@ -256,7 +256,7 @@ public sealed partial class YamlDocument
     {
         tokenId = 0;
 
-        if (!TryGetNumberVariant(ScalarText(scalar), out var variant))
+        if (!TryGetNumberVariant(_scalars.GetWrittenSpanFromOffset(scalar.Start), out var variant))
         {
             return false;
         }
@@ -269,92 +269,64 @@ public sealed partial class YamlDocument
     /// <inheritdoc />
     protected override long DecodeInteger(DToken token)
     {
-        var bytes = ScalarBytes(token);
+        var bytes = GetStoredScalarBytes(token);
         if (bytes.Contains(YamlSyntax.Underscore))
         {
-            bytes = WithoutDigitSeparators(bytes);
+            bytes = RemoveDigitSeparators(bytes);
         }
 
-        if (
-            Utf8Parser.TryParse(bytes, out long value, out var consumed)
+        return Utf8Parser.TryParse(bytes, out long value, out var consumed)
             && consumed == bytes.Length
-        )
-        {
-            return value;
-        }
-
-        if (
-            Utf8Parser.TryParse(bytes, out ulong unsigned, out consumed)
+                ? value
+            : Utf8Parser.TryParse(bytes, out ulong unsigned, out consumed)
             && consumed == bytes.Length
-        )
-        {
-            return unchecked((long)unsigned);
-        }
-
-        if (TryParsePrefixedInteger(bytes, out var prefixed))
-        {
-            return unchecked((long)prefixed);
-        }
-
-        throw new InvalidCastException();
+                ? unchecked((long)unsigned)
+            : TryParsePrefixedInteger(bytes, out var prefixed) ? unchecked((long)prefixed)
+            : throw ParseError(
+                ParseException.ErrorCode.InvalidFormat,
+                "The stored integer cannot be decoded."
+            );
     }
 
     /// <inheritdoc />
     protected override double DecodeFloat(DToken token)
     {
-        var bytes = ScalarBytes(token);
+        var bytes = GetStoredScalarBytes(token);
         if (bytes.Contains(YamlSyntax.Underscore))
         {
-            bytes = WithoutDigitSeparators(bytes);
+            bytes = RemoveDigitSeparators(bytes);
         }
 
-        if (
-            bytes.StartsWith(YamlSyntax.NegativeInfinityPrefixUtf8)
+        return bytes.StartsWith(YamlSyntax.NegativeInfinityPrefixUtf8)
             && bytes.Length >= YamlSyntax.InfinitySuffixUtf8.Length
             && Ascii.EqualsIgnoreCase(
                 bytes[^YamlSyntax.InfinitySuffixUtf8.Length..],
                 YamlSyntax.InfinitySuffixUtf8
             )
-        )
-        {
-            return double.NegativeInfinity;
-        }
-
-        if (
-            bytes.Length >= YamlSyntax.PositiveInfinitySuffixUtf8.Length
+                ? double.NegativeInfinity
+            : bytes.Length >= YamlSyntax.PositiveInfinitySuffixUtf8.Length
             && Ascii.EqualsIgnoreCase(
                 bytes[^YamlSyntax.PositiveInfinitySuffixUtf8.Length..],
                 YamlSyntax.PositiveInfinitySuffixUtf8
             )
-        )
-        {
-            return double.PositiveInfinity;
-        }
-
-        if (
-            bytes.Length >= YamlSyntax.NotANumberSuffixUtf8.Length
+                ? double.PositiveInfinity
+            : bytes.Length >= YamlSyntax.NotANumberSuffixUtf8.Length
             && Ascii.EqualsIgnoreCase(
                 bytes[^YamlSyntax.NotANumberSuffixUtf8.Length..],
                 YamlSyntax.NotANumberSuffixUtf8
             )
-        )
-        {
-            return double.NaN;
-        }
-
-        return double.Parse(bytes, CultureInfo.InvariantCulture);
+                ? double.NaN
+            : double.Parse(bytes, CultureInfo.InvariantCulture);
     }
 
     /// <inheritdoc />
     protected override ReadOnlySpan<byte> DecodeBigNumber(DToken token)
     {
-        var bytes = ScalarBytes(token);
-        if (bytes.Contains(YamlSyntax.Underscore))
-        {
-            return WithoutDigitSeparators(bytes);
-        }
+        var bytes = GetStoredScalarBytes(token);
 
-        return bytes;
+        return bytes.Contains(YamlSyntax.Underscore)
+            ? (ReadOnlySpan<byte>)RemoveDigitSeparators(bytes)
+            : bytes;
     }
 
     private static void WriteNumber(Utf8TextWriter writer, in DataReader reader, uint tokenId)

@@ -11,31 +11,121 @@ namespace REDox.Yaml.Tests;
 
 internal static class YamlTestHelper
 {
-    // The YAML must parse to the value of the JSON text, and the value must survive writing and reading again.
-    public static void ParsesAs(string yaml, string expectedJson)
+    // NOTE: DocumentParseException has no error-code property.
+    //       Prefix the code with the document type for this assertion.
+    public static void AssertYamlParseError(
+        DocumentParseException exception,
+        string expectedErrorCode,
+        int expectedBytePosition = -1
+    )
     {
-        using var expected = JsonDocument.Parse(expectedJson);
-        using var document = YamlDocument.Parse(yaml);
+        var expectedPrefix =
+            expectedBytePosition >= 0
+                ? $"{nameof(YamlDocument)} Error ({expectedErrorCode}): BytePosition: {expectedBytePosition}"
+                : $"{nameof(YamlDocument)} Error ({expectedErrorCode}): BytePosition: ";
+
+        Assert.StartsWith(expectedPrefix, exception.Message);
+    }
+
+    public static DocumentParseException AssertYamlParseError(
+        Action action,
+        string expectedErrorCode,
+        int expectedBytePosition = -1
+    )
+    {
+        var exception = Assert.ThrowsAny<DocumentParseException>(action);
+
+        AssertYamlParseError(exception, expectedErrorCode, expectedBytePosition);
+
+        return exception;
+    }
+
+    // These inputs may be accepted or rejected by the JSON reader, including during lazy value access.
+    // A rejected case may stop this YAML test only when the diagnostic belongs to that reader.
+    public static void AssertParseErrorCameFromJsonDocument(
+        DocumentParseException exception,
+        byte[] json
+    )
+    {
+        Assert.Equal(nameof(JsonDocument), exception.DocumentTypeName);
+        Assert.InRange(exception.BytePosition, 0, json.Length);
+        Assert.True(exception.LineNumber >= 1);
+        Assert.True(exception.BytePositionInLine >= 0);
+    }
+
+    public static void AssertYamlParsesAsJsonValueAndRoundTrips(string yaml, string expectedJson)
+    {
+        using var expectedJsonDocument = JsonDocument.Parse(expectedJson);
+        using var parsedYamlDocument = YamlDocument.Parse(yaml);
 
         Assert.True(
-            DValue.DeepEquals(expected.RootElement.AsValue(), document.RootElement.AsValue()),
+            DValue.DeepEquals(
+                expectedJsonDocument.RootElement.AsValue(),
+                parsedYamlDocument.RootElement.AsValue()
+            ),
             $"Parsing the YAML did not give {expectedJson}. YAML: {yaml}"
         );
 
-        var written = YamlDocument.EncodeToString(document.RootElement);
-        using var reparsed = YamlDocument.Parse(written);
+        var writtenYaml = YamlDocument.EncodeToString(parsedYamlDocument.RootElement);
+
+        using var roundTrippedYamlDocument = YamlDocument.Parse(writtenYaml);
 
         Assert.True(
-            DValue.DeepEquals(expected.RootElement.AsValue(), reparsed.RootElement.AsValue()),
-            $"Writing and reading the YAML again changed the value. Written: {written}"
+            DValue.DeepEquals(
+                expectedJsonDocument.RootElement.AsValue(),
+                roundTrippedYamlDocument.RootElement.AsValue()
+            ),
+            $"Writing and reading the YAML again changed the value. Written: {writtenYaml}"
         );
     }
 
-    // The multiline mode writes every string as a block scalar, which cannot hold a control character other than the
-    // line feed and the tab, so it refuses such a string with a NotSupportedException. A round trip test calls this
-    // from its catch: the refusal is accepted only when the JSON really has such a string value, so nothing is skipped
-    // without a reason.
-    public static void AssertMultilineRefusalIsJustified(byte[] json, string name)
+    // Each parsed document must retain the value; matching serialized text alone cannot establish a lossless conversion.
+    public static void AssertJsonYamlJsonRoundTripPreservesValues(
+        JsonDocument sourceJsonDocument,
+        YamlWriteOptions options,
+        string caseName
+    )
+    {
+        var yamlFromJson = YamlDocument.EncodeToString(sourceJsonDocument.RootElement, options);
+
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
+
+        Assert.True(
+            DValue.DeepEquals(
+                sourceJsonDocument.RootElement.AsValue(),
+                convertedYamlDocument.RootElement.AsValue()
+            ),
+            $"Converting {caseName} from JSON to YAML changed its value."
+        );
+
+        // The API compares the JSON read back with both this YAML and the original JSON source.
+        convertedYamlDocument.ValidateJsonYamlRoundTripPreservesValues(
+            options,
+            sourceJsonDocument.RootElement
+        );
+    }
+
+    // The source check cannot establish which string caused the refusal.
+    public static void AssertMultilineStyleRefusalReportsUnsupportedFeatureAndJsonHasUnrepresentableStringValue(
+        DocumentParseException exception,
+        byte[] json,
+        string name
+    )
+    {
+        AssertYamlParseError(exception, "UnsupportedFeature");
+        Assert.EndsWith(
+            " (This string cannot be written as a YAML block scalar.)",
+            exception.Message
+        );
+
+        AssertJsonContainsStringValueUnrepresentableAsBlockScalar(json, name);
+    }
+
+    // JSON keys are not written as block scalars, so only a string value can justify this refusal.
+    public static void AssertJsonContainsStringValueUnrepresentableAsBlockScalar(
+        byte[] json,
+        string name
+    )
     {
         Assert.True(
             HasStringValueThatABlockScalarCannotHold(json),
@@ -43,15 +133,14 @@ internal static class YamlTestHelper
         );
     }
 
-    // Only the string values count: the keys of a map are not written as block scalars.
     private static bool HasStringValueThatABlockScalarCannotHold(byte[] json)
     {
-        using var document = System.Text.Json.JsonDocument.Parse(
+        using var jsonDocument = System.Text.Json.JsonDocument.Parse(
             json,
             new System.Text.Json.JsonDocumentOptions { MaxDepth = 4096 }
         );
 
-        return HasStringValueThatABlockScalarCannotHold(document.RootElement);
+        return HasStringValueThatABlockScalarCannotHold(jsonDocument.RootElement);
     }
 
     private static bool HasStringValueThatABlockScalarCannotHold(
@@ -87,18 +176,15 @@ internal static class YamlTestHelper
 
                 Debug.Assert(text != null); // JsonElement.GetString returns null only for a JSON null, and this is a string.
 
-                return text.Any(c => char.IsControl(c) && c != '\n' && c != '\t');
+                return text.Any(static c => char.IsControl(c) && c != '\n' && c != '\t');
 
             default:
                 return false;
         }
     }
 
-    // A stream with no document (empty, blank, or only comments) is valid YAML, but it cannot be classified: it is
-    // neither a null nor any other value of JSON, and Core has no empty document to stand for it. The parser gives
-    // it a single null root (see YamlDocument.Read), so that is all that can be verified: the root is a valid
-    // element, not an invalid one, and it is null.
-    public static void IsEmptyDocument(YamlDocument document)
+    // Core has no empty-document value, so an empty YAML stream uses a null root (see YamlDocument.Read).
+    public static void AssertEmptyYamlDocumentHasNullRoot(YamlDocument document)
     {
         Assert.True(document.IsValid);
         Assert.Equal(DTokenKind.Null, document.RootElement.Token.Kind);
@@ -114,16 +200,16 @@ internal static class YamlTestHelper
     // "i_*": JSON that the specification leaves ambiguous, so a parser may accept or reject it (huge numbers, lone
     // surrogates, invalid UTF-8, 500 nested arrays, ...). Whatever is accepted need not come back equal (a lone
     // surrogate is written as the replacement character), so these files are left out of the round trip tests.
-    // YamlJsonSuiteRoundTripTest.SpecAmbiguousTest checks that what the JSON reader accepts does not break YAML.
+    // YamlJsonSuiteRoundTripTest.SpecAmbiguousTest only checks that accepted files produce parseable YAML;
+    // rejected files do not exercise YAML, and accepted values are not compared.
     public const string JsonSuiteSpecAmbiguousPattern = "i_*";
 
     private static readonly string[] JsonSuiteTestDirectories = ["test_parsing", "test_transform"];
 
-    // Every file except the ones that need not (or cannot) round trip.
-    public static IEnumerable<string> GetJsonSuiteValidFiles()
+    public static IEnumerable<string> GetJsonSuiteFilesEligibleForYamlRoundTrip()
     {
         return GetJsonSuiteAllFiles()
-            .Where(path =>
+            .Where(static path =>
                 !MatchesFileName(path, JsonSuiteInvalidPattern)
                 && !MatchesFileName(path, JsonSuiteSpecAmbiguousPattern)
             );
@@ -155,11 +241,17 @@ internal static class YamlTestHelper
     {
         var suite = FindJsonSuiteDirectory();
 
-        return JsonSuiteTestDirectories
+        var files = JsonSuiteTestDirectories
             .SelectMany(directory =>
                 Directory.EnumerateFiles(Path.Combine(suite, directory), "*.json")
             )
-            .Order(StringComparer.Ordinal);
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        // A new JSONTestSuite file must be reviewed even if it is excluded from YAML round trips.
+        Assert.Equal(340, files.Length);
+
+        return files;
     }
 
     private static bool MatchesFileName(string path, string pattern)
@@ -171,6 +263,8 @@ internal static class YamlTestHelper
 internal static class TestExtensions
 {
     public static string? AsString(this DValue value) => (string?)value;
+
+    public static int AsInt32(this DValue value) => (int)value;
 
     public static long AsInt64(this DValue value) => (long)value;
 
@@ -187,8 +281,8 @@ internal static class TestExtensions
 
 public sealed class YamlTestHelperTest
 {
-    // The refusal is justified, and the helper passes, only for a string value with a control character other than the
-    // line feed and the tab, wherever it is. A refusal of any other JSON has another reason: the helper must fail.
+    // The helper passes only when a string value contains a control character other than LF or TAB. It does not
+    // inspect an exception or prove that this character caused a multiline writer to refuse the document.
     [Theory]
     [InlineData("\"a\\u0000b\"", true)]
     [InlineData("\"\\r\"", true)]
@@ -197,7 +291,7 @@ public sealed class YamlTestHelperTest
     [InlineData("{\"a\":[\"b\",1,null]}", false)]
     // A control character in a key is not a string value: keys are not written as block scalars.
     [InlineData("{\"\\u0000\":1}", false)]
-    public void RefusalIsJustifiedOnlyForAStringThatABlockScalarCannotHold(
+    public void JsonStringValueUnrepresentableAsBlockScalar_IsRequiredForMultilineRefusal(
         string json,
         bool justified
     )
@@ -206,12 +300,15 @@ public sealed class YamlTestHelperTest
 
         if (justified)
         {
-            YamlTestHelper.AssertMultilineRefusalIsJustified(bytes, json);
+            YamlTestHelper.AssertJsonContainsStringValueUnrepresentableAsBlockScalar(bytes, json);
         }
         else
         {
             Assert.ThrowsAny<Xunit.Sdk.XunitException>(() =>
-                YamlTestHelper.AssertMultilineRefusalIsJustified(bytes, json)
+                YamlTestHelper.AssertJsonContainsStringValueUnrepresentableAsBlockScalar(
+                    bytes,
+                    json
+                )
             );
         }
     }

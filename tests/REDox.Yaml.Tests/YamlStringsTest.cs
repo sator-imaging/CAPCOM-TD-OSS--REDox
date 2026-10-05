@@ -1,4 +1,3 @@
-﻿using System;
 using System.Text.Json;
 
 namespace REDox.Yaml.Tests;
@@ -28,7 +27,7 @@ public sealed class YamlStringsTest
     [InlineData("\"a\\ \n  b\"", "a  b")]
     [InlineData("'a\n  b\n\n  c'", "a b\nc")]
     [InlineData("\"tab\there\"", "tab\there")]
-    public void ParseStringStyles(string yaml, string expected)
+    public void StringStyles_ParseExpectedValue(string yaml, string expected)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -42,7 +41,7 @@ public sealed class YamlStringsTest
     [InlineData("a\nb\n\n")]
     [InlineData(" leading")]
     [InlineData("")]
-    public void StringStylesPreserveValue(string value)
+    public void StringStyles_PreserveValue(string value)
     {
         var source = DValue.Create(value).AsElement();
         foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
@@ -93,7 +92,7 @@ public sealed class YamlStringsTest
     [InlineData("a\tb", false)]
     [InlineData("a\nb", false)]
     [InlineData("a\u007fb", false)]
-    public void ValueIsQuotedOnlyWhenNeeded(string value, bool plain)
+    public void StringValue_QuotesOnlyWhenNeeded(string value, bool plain)
     {
         var yaml = YamlDocument.EncodeToString(
             DValue.Create(value).AsElement(),
@@ -116,27 +115,25 @@ public sealed class YamlStringsTest
     [InlineData("true", false)]
     [InlineData("1", false)]
     [InlineData("", false)]
-    public void KeyIsQuotedOnlyWhenNeeded(string key, bool plain)
+    public void StringKey_QuotesOnlyWhenNeeded(string key, bool plain)
     {
         var json = "{" + JsonSerializer.Serialize(key) + ":1}";
-        using var source = Json.JsonDocument.Parse(json);
 
-        var yaml = YamlDocument.EncodeToString(
-            source.RootElement,
+        using var sourceJsonDocument = Json.JsonDocument.Parse(json);
+
+        var yamlFromJson = YamlDocument.EncodeToString(
+            sourceJsonDocument.RootElement,
             new YamlWriteOptions { NewLine = "\n" }
         );
 
-        Assert.Equal(plain, !yaml.StartsWith('"'));
+        Assert.Equal(plain, !yamlFromJson.StartsWith('"'));
 
-        using var parsed = YamlDocument.Parse(yaml);
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
 
-        Assert.Equal(1, parsed.RootElement.GetProperty(key).GetInt64());
+        Assert.Equal(1, convertedYamlDocument.RootElement.GetProperty(key).GetInt64());
     }
 
-    // Characters YAML cannot hold as they are (DEL, the C1 controls, the non-characters) are escaped in a quoted
-    // string; the others that need care (line and paragraph separators, the byte order mark) are kept. In every
-    // case the string comes back unchanged. The characters are built from their code points, so that no invisible
-    // character appears in the source.
+    // Build these characters from code points so invisible source characters cannot obscure a failure.
     [Theory]
     [InlineData(0x7f, true)]
     [InlineData(0x80, true)]
@@ -151,7 +148,10 @@ public sealed class YamlStringsTest
     [InlineData(0xfeff, false)]
     [InlineData(0xa0, false)]
     [InlineData(0x3000, false)]
-    public void SpecialCharacterRoundTripsInQuotedString(int codePoint, bool escaped)
+    public void SpecialCharacterInQuotedString_EscapesWhenRequiredAndRoundTrips(
+        int codePoint,
+        bool escaped
+    )
     {
         var character = ((char)codePoint).ToString();
         var value = "a" + character + "b";
@@ -165,23 +165,23 @@ public sealed class YamlStringsTest
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
-    // The same characters as the key of a map.
     [Theory]
     [InlineData(0x7f)]
     [InlineData(0x85)]
     [InlineData(0x2028)]
     [InlineData(0xfeff)]
-    public void SpecialCharacterRoundTripsInKey(int codePoint)
+    public void SpecialCharacterInKey_RoundTrips(int codePoint)
     {
         var key = "k" + ((char)codePoint) + "k";
         var json = "{" + JsonSerializer.Serialize(key) + ":1}";
-        using var source = Json.JsonDocument.Parse(json);
 
-        var yaml = YamlDocument.EncodeToString(source.RootElement);
+        using var sourceJsonDocument = Json.JsonDocument.Parse(json);
 
-        using var parsed = YamlDocument.Parse(yaml);
+        var yamlFromJson = YamlDocument.EncodeToString(sourceJsonDocument.RootElement);
 
-        Assert.Equal(1, parsed.RootElement.GetProperty(key).GetInt64());
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
+
+        Assert.Equal(1, convertedYamlDocument.RootElement.GetProperty(key).GetInt64());
     }
 
     // A block scalar cannot hold DEL or the C1 controls: the multiline mode refuses them rather than writing a
@@ -191,25 +191,26 @@ public sealed class YamlStringsTest
     [InlineData(0x80)]
     [InlineData(0x85)]
     [InlineData(0x9f)]
-    public void MultilineModeRefusesControlCharacter(int codePoint)
+    public void ControlCharacterWithMultilineStyle_Throws(int codePoint)
     {
         var value = "a" + (char)codePoint + "b";
 
-        Assert.Throws<NotSupportedException>(() =>
-            YamlDocument.EncodeToString(
-                DValue.Create(value).AsElement(),
-                new YamlWriteOptions { StringStyle = YamlStringStyle.Multiline }
-            )
+        YamlTestHelper.AssertYamlParseError(
+            () =>
+                YamlDocument.EncodeToString(
+                    DValue.Create(value).AsElement(),
+                    new YamlWriteOptions { StringStyle = YamlStringStyle.Multiline }
+                ),
+            "UnsupportedFeature"
         );
     }
 
-    // The separators and the byte order mark are ordinary text in a block scalar.
     [Theory]
     [InlineData(0x2028)]
     [InlineData(0x2029)]
     [InlineData(0xfeff)]
     [InlineData(0x3000)]
-    public void MultilineModeKeepsOrdinaryCharacter(int codePoint)
+    public void UnicodeSeparatorsByteOrderMarkAndSpaceWithMultilineStyle_RoundTrip(int codePoint)
     {
         var value = "a" + (char)codePoint + "b\nc";
 
@@ -229,7 +230,7 @@ public sealed class YamlStringsTest
     [InlineData(0xd800)]
     [InlineData(0xdc00)]
     [InlineData(0xdfff)]
-    public void IsolatedSurrogateIsWrittenAsReplacementCharacter(int surrogate)
+    public void IsolatedSurrogate_WritesAsReplacementCharacter(int surrogate)
     {
         var value = "a" + (char)surrogate + "b";
 
@@ -241,7 +242,7 @@ public sealed class YamlStringsTest
     }
 
     [Fact]
-    public void PairedSurrogatesRoundTrip()
+    public void PairedSurrogates_RoundTrip()
     {
         var value = "a" + char.ConvertFromUtf32(0x1f600) + char.ConvertFromUtf32(0x10ffff) + "b";
 
@@ -252,15 +253,16 @@ public sealed class YamlStringsTest
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
-    // An indentation indicator that is smaller than the indentation of the lines is valid: the extra spaces are the
-    // start of the content.
     [Theory]
     [InlineData("a: |1\n    text\n", "   text\n")]
     [InlineData("a: |2\n    text\n", "  text\n")]
     [InlineData("a: |4\n    text\n", "text\n")]
     [InlineData("a: >1\n    text\n", "   text\n")]
     [InlineData("a: |9\n          text\n", " text\n")]
-    public void IndicatorSmallerThanTheIndentationKeepsTheExtraSpaces(string yaml, string expected)
+    public void IndentationIndicatorSmallerThanLineIndent_PreservesExtraContentSpaces(
+        string yaml,
+        string expected
+    )
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -268,7 +270,7 @@ public sealed class YamlStringsTest
     }
 
     [Fact]
-    public void DuplicateKeepsStringsAfterOriginalIsDisposed()
+    public void DisposedOriginal_DuplicateRetainsStrings()
     {
         using var duplicate = Duplicate("a: \"one\"\nb: |\n  two\n");
 
@@ -284,7 +286,7 @@ public sealed class YamlStringsTest
     }
 
     [Fact]
-    public void FoldedPlainScalarKeepsBlankLine()
+    public void FoldedPlainScalar_PreservesBlankLine()
     {
         using var document = YamlDocument.Parse("plain: a\n  b\n\n  c\n");
 

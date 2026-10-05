@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Buffers.Text;
+using System.Diagnostics;
 using REDox.Serialization;
 
 namespace REDox.Yaml;
@@ -78,14 +80,17 @@ public sealed class YamlWriter : DataWriter, IDisposable
     /// Ends the document and returns the UTF-8 bytes of the YAML.
     /// </summary>
     /// <returns>The UTF-8 bytes.</returns>
-    /// <exception cref="InvalidOperationException">No value was written, or a map or an array is not ended.</exception>
+    /// <exception cref="DocumentParseException">No value was written, or a map or an array is not ended.</exception>
     public byte[] Encode()
     {
         if (!_completed)
         {
             if (_top != 0 || !_rootWritten)
             {
-                ThrowHelper.ThrowInvalidOperation("The YAML document is not complete.");
+                YamlDocument.ThrowGenericError(
+                    YamlDocument.ParseException.ErrorCode.InvalidOperation,
+                    "The YAML document is not complete."
+                );
             }
 
             _writer.WriteNewLine();
@@ -100,7 +105,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     {
         if (frame.Count > 0 || frame.AfterIndicator)
         {
-            _writer.WriteIndentNewLine();
+            YamlDocument.WriteValueSeparator(_writer, blockValue: true);
         }
     }
 
@@ -129,11 +134,10 @@ public sealed class YamlWriter : DataWriter, IDisposable
         if (!frame.IsMap)
         {
             BeginEntry(ref frame);
-            _writer.WriteUtf8Byte(YamlSyntax.Dash);
-            _writer.PushIndent();
+            YamlDocument.WriteCollectionIndicator(_writer, mapValue: false);
         }
 
-        _writer.WriteUtf8Byte(YamlSyntax.Space);
+        YamlDocument.WriteValueSeparator(_writer, blockValue: false);
 
         depth = frame.Depth + 1;
 
@@ -150,8 +154,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
         ref var frame = ref _frames[_top - 1];
         if (key)
         {
-            _writer.WriteUtf8Byte(YamlSyntax.MappingValueIndicator);
-            _writer.PushIndent();
+            YamlDocument.WriteCollectionIndicator(_writer, mapValue: true);
 
             frame.ValueNext = true;
 
@@ -173,7 +176,10 @@ public sealed class YamlWriter : DataWriter, IDisposable
     {
         if (_rootWritten)
         {
-            ThrowHelper.ThrowInvalidOperation("A YAML document has one root value.");
+            YamlDocument.ThrowGenericError(
+                YamlDocument.ParseException.ErrorCode.InvalidOperation,
+                "A YAML document has one root value."
+            );
         }
 
         _rootWritten = true;
@@ -192,14 +198,16 @@ public sealed class YamlWriter : DataWriter, IDisposable
             ref var parent = ref _frames[_top - 1];
             if (parent.IsMap && !parent.ValueNext)
             {
-                ThrowHelper.ThrowNotSupported("YAML collection keys are not supported.");
+                YamlDocument.ThrowGenericError(
+                    YamlDocument.ParseException.ErrorCode.UnsupportedFeature,
+                    "YAML collection keys are not supported."
+                );
             }
 
             if (!parent.IsMap)
             {
                 BeginEntry(ref parent);
-                _writer.WriteUtf8Byte(YamlSyntax.Dash);
-                _writer.PushIndent();
+                YamlDocument.WriteCollectionIndicator(_writer, mapValue: false);
             }
 
             afterIndicator = true;
@@ -208,7 +216,8 @@ public sealed class YamlWriter : DataWriter, IDisposable
 
         if (_top >= SerializerSettings.DefaultMaxDepth)
         {
-            ThrowHelper.ThrowInvalidOperation(
+            YamlDocument.ThrowGenericError(
+                YamlDocument.ParseException.ErrorCode.InvalidOperation,
                 $"Exceeded maximum depth of {SerializerSettings.DefaultMaxDepth}."
             );
         }
@@ -230,7 +239,8 @@ public sealed class YamlWriter : DataWriter, IDisposable
     {
         if (_top == 0 || _frames[_top - 1].IsMap != isMap)
         {
-            ThrowHelper.ThrowInvalidOperation(
+            YamlDocument.ThrowGenericError(
+                YamlDocument.ParseException.ErrorCode.InvalidOperation,
                 "The end does not match the start of the collection."
             );
         }
@@ -238,18 +248,16 @@ public sealed class YamlWriter : DataWriter, IDisposable
         var frame = _frames[--_top];
         if (frame.ValueNext)
         {
-            ThrowHelper.ThrowInvalidOperation("A map key has no value.");
+            YamlDocument.ThrowGenericError(
+                YamlDocument.ParseException.ErrorCode.InvalidOperation,
+                "A map key has no value."
+            );
         }
 
         // A collection with no entries is written on the line of its key or dash, as the flow form.
         if (frame.Count == 0)
         {
-            if (frame.AfterIndicator)
-            {
-                _writer.WriteUtf8Byte(YamlSyntax.Space);
-            }
-
-            _writer.WriteString(isMap ? YamlSyntax.EmptyMappingUtf8 : YamlSyntax.EmptySequenceUtf8);
+            YamlDocument.WriteEmptyCollection(_writer, isMap, frame.AfterIndicator);
         }
 
         if (_top > 0)
@@ -441,7 +449,13 @@ public sealed class YamlWriter : DataWriter, IDisposable
     /// <inheritdoc />
     public override void WriteGuid(Guid value)
     {
-        WriteString(value.ToString());
+        Span<byte> utf8Bytes = stackalloc byte[36];
+        var formatted = Utf8Formatter.TryFormat(value, utf8Bytes, out var bytesWritten);
+
+        Debug.Assert(formatted);
+
+        // The formatted GUID must still honor YAML string styling, including forced quotes.
+        WriteString(utf8Bytes[..bytesWritten]);
     }
 
     /// <inheritdoc />
@@ -450,6 +464,6 @@ public sealed class YamlWriter : DataWriter, IDisposable
         ByteStringKind kind = ByteStringKind.Default
     )
     {
-        WriteString(YamlDocument.ByteStringText(value, kind));
+        WriteString(YamlDocument.EncodeByteStringAsYamlText(value, kind));
     }
 }

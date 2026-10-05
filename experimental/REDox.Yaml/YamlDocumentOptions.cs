@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -81,7 +81,7 @@ public readonly record struct YamlDocumentOptions
     /// root are not affected: their parent has an indentation of 0 or more, and the two readings agree. Only -1 and
     /// larger values are accepted.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">The value is less than -1.</exception>
+    /// <exception cref="DocumentParseException">The value is less than -1.</exception>
     public int RootIndentationLevel
     {
         get;
@@ -89,8 +89,8 @@ public readonly record struct YamlDocumentOptions
         {
             if (value < -1)
             {
-                ThrowHelper.ThrowArgumentOutOfRange(
-                    nameof(value),
+                YamlDocument.ThrowGenericError(
+                    YamlDocument.ParseException.ErrorCode.InvalidOption,
                     "RootIndentationLevel must be -1 or larger."
                 );
             }

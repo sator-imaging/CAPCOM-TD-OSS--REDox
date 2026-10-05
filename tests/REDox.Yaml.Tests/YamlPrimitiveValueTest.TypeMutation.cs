@@ -35,7 +35,7 @@ public sealed partial class YamlPrimitiveValueTest
 
     [Theory]
     [MemberData(nameof(GetBinaryValues))]
-    public void BinaryValueIsWrittenAsStringAndReadsBackAsString(string name, string text)
+    public void BinaryValue_WritesAndReadsBackAsString(string name, string text)
     {
         var yaml = YamlDocument.EncodeToString(CreateBinary(name).AsElement());
 
@@ -47,7 +47,7 @@ public sealed partial class YamlPrimitiveValueTest
 
     [Theory]
     [MemberData(nameof(GetBinaryValues))]
-    public void BinaryValueInsideACollectionIsWrittenAsString(string name, string text)
+    public void BinaryValueInsideCollection_WritesAsString(string name, string text)
     {
         var map = new DObject { { "before", DValue.Create(1) }, { "data", CreateBinary(name) } };
 
@@ -64,7 +64,7 @@ public sealed partial class YamlPrimitiveValueTest
 
     [Theory]
     [MemberData(nameof(GetBinaryValues))]
-    public void BinaryKeyIsWrittenAsString(string name, string text)
+    public void BinaryKey_WritesAsString(string name, string text)
     {
         var map = new DMap { { CreateBinary(name), DValue.Create("value") } };
 
@@ -79,7 +79,7 @@ public sealed partial class YamlPrimitiveValueTest
 
     [Theory]
     [MemberData(nameof(GetBinaryValues))]
-    public void BinaryValueIsWrittenAsBlockScalarInTheMultilineStyle(string name, string text)
+    public void BinaryValueWithMultilineStyle_WritesAsBlockScalar(string name, string text)
     {
         var yaml = YamlDocument.EncodeToString(
             CreateBinary(name).AsElement(),
@@ -92,7 +92,7 @@ public sealed partial class YamlPrimitiveValueTest
     }
 
     [Fact]
-    public void BinaryTextThatLooksLikeANumberIsQuoted()
+    public void NumericLookingBinaryText_WritesQuoted()
     {
         var yaml = YamlDocument.EncodeToString(
             CreateBinary("base16").AsElement(),
@@ -112,7 +112,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData(SymbolKind.Reference)]
     [InlineData(SymbolKind.TypeName)]
     [InlineData(SymbolKind.Metadata)]
-    public void SymbolIsWrittenAsItsText(SymbolKind kind)
+    public void Symbol_WritesAsItsText(SymbolKind kind)
     {
         var value = DValue.Create(new Utf8Symbol("name"), kind);
 

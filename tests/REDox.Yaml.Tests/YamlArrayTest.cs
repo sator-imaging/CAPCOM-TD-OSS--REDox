@@ -1,14 +1,15 @@
-﻿namespace REDox.Yaml.Tests;
+namespace REDox.Yaml.Tests;
 
 public sealed class YamlArrayTest
 {
     [Theory]
     [InlineData("[]")]
-    public void ParseEmptyArray(string yaml)
+    public void EmptyArray_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(0, document.RootElement.GetArrayLength());
@@ -19,11 +20,12 @@ public sealed class YamlArrayTest
 
     [Theory]
     [InlineData("[1, true, null]")]
-    public void ParseMixedArray(string yaml)
+    public void MixedArray_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.True(
@@ -37,11 +39,12 @@ public sealed class YamlArrayTest
 
     [Theory]
     [InlineData("- 1\n- 2\n")]
-    public void ParseBlockArray(string yaml)
+    public void BlockArray_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.True(DValue.DeepEquals(new DArray(1, 2), document.RootElement.AsValue()));
@@ -50,7 +53,6 @@ public sealed class YamlArrayTest
         );
     }
 
-    // The block and flow shapes of an array, each checked against the value it must stand for.
     [Theory]
     [InlineData("- a: 1\n  b: 2\n- c: 3\n", "[{\"a\":1,\"b\":2},{\"c\":3}]")]
     [InlineData("-\n  a: 1\n  b: 2\n", "[{\"a\":1,\"b\":2}]")]
@@ -66,21 +68,24 @@ public sealed class YamlArrayTest
     [InlineData("[1,\n 2,\n [3,\n  4]]", "[1,2,[3,4]]")]
     [InlineData("[\n  1,\n  2,\n]\n", "[1,2]")]
     [InlineData("- [1,\n  2]\n- [3]\n", "[[1,2],[3]]")]
-    public void ArrayShapes(string yaml, string expectedJson)
+    public void BlockAndFlowArrayShapes_ParseExpectedValuesAndRoundTrip(
+        string yaml,
+        string expectedJson
+    )
     {
-        YamlTestHelper.ParsesAs(yaml, expectedJson);
+        YamlTestHelper.AssertYamlParsesAsJsonValueAndRoundTrips(yaml, expectedJson);
     }
 
     [Theory]
     [InlineData("- [1, 2]\n- []\n")]
-    public void ParseNestedArray(string yaml)
+    public void NestedArray_ParsesExpectedValuesAndRoundTripsRegardlessOfWriterStyle(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
-        // Verify nested values independently of the YAML collection style used by the writer.
         Assert.True(
             DValue.DeepEquals(
                 new DArray(new DArray(1, 2), new DArray()),

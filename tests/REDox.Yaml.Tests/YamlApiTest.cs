@@ -16,14 +16,17 @@ public sealed partial class YamlApiTest
     private const string SampleJson =
         "{\"name\":\"a: b\",\"list\":[1,true,null],\"nested\":{\"key\":1.5}}";
 
-    private static readonly YamlWriteOptions Options = new YamlWriteOptions { NewLine = "\n" };
+    private static readonly YamlWriteOptions Options = new() { NewLine = "\n" };
 
-    private static void AssertIsSample(YamlDocument document)
+    private static void AssertIsSample(YamlDocument parsedYamlDocument)
     {
-        using var expected = Json.JsonDocument.Parse(SampleJson);
+        using var expectedJsonDocument = Json.JsonDocument.Parse(SampleJson);
 
         Assert.True(
-            DValue.DeepEquals(expected.RootElement.AsValue(), document.RootElement.AsValue())
+            DValue.DeepEquals(
+                expectedJsonDocument.RootElement.AsValue(),
+                parsedYamlDocument.RootElement.AsValue()
+            )
         );
     }
 
@@ -34,15 +37,15 @@ public sealed partial class YamlApiTest
     [InlineData("\n")]
     [InlineData("   \n")]
     [InlineData("# one\n# two\n")]
-    public void StreamWithoutDocumentIsASingleNull(string yaml)
+    public void StreamWithoutDocument_ReturnsSingleNull(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
-        YamlTestHelper.IsEmptyDocument(document);
+        YamlTestHelper.AssertEmptyYamlDocumentHasNullRoot(document);
     }
 
     [Fact]
-    public void ParseFromString()
+    public void StringInput_ParsesYaml()
     {
         using var document = YamlDocument.Parse(Sample);
 
@@ -50,7 +53,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void ParseFromStream()
+    public void StreamInput_ParsesYaml()
     {
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes(Sample));
         using var document = YamlDocument.Parse(stream);
@@ -59,7 +62,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void ParseFromByteArray()
+    public void ByteArrayInput_ParsesYaml()
     {
         using var document = YamlDocument.Parse(Encoding.UTF8.GetBytes(Sample));
 
@@ -67,16 +70,17 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void ParseFromReadOnlyMemory()
+    public void ReadOnlyMemoryInput_ParsesYaml()
     {
         ReadOnlyMemory<byte> memory = Encoding.UTF8.GetBytes(Sample);
+
         using var document = YamlDocument.Parse(memory);
 
         AssertIsSample(document);
     }
 
     [Fact]
-    public void TryParseSucceeds()
+    public void ValidInput_TryParseSucceeds()
     {
         var parsed = YamlDocument.TryParse(Encoding.UTF8.GetBytes(Sample), out var document);
 
@@ -90,7 +94,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void TryParseFailsWithoutThrowing()
+    public void InvalidInput_TryParseReturnsFalseWithoutThrowing()
     {
         var parsed = YamlDocument.TryParse("a: [1, 2"u8, out var document);
 
@@ -99,22 +103,20 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void ParseRejectsNullArguments()
+    public void NullArguments_ParseThrows()
     {
         string? text = null;
         byte[]? bytes = null;
         Stream? stream = null;
 
-        // Parse doesn't accept nullable values
+        // Parse API doesn't accept nullable values
         Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(text!));
         Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(bytes!));
         Assert.Throws<ArgumentNullException>(() => YamlDocument.Parse(stream!));
     }
 
-    // Public entry points: writing. Every one writes what EncodeToString writes.
-
     [Fact]
-    public void EncodeToByteArray()
+    public void ByteArrayOutput_EncodesYaml()
     {
         using var document = YamlDocument.Parse(Sample);
 
@@ -127,7 +129,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void EncodeToStream()
+    public void StreamOutput_EncodesYaml()
     {
         using var document = YamlDocument.Parse(Sample);
         using var stream = new MemoryStream();
@@ -141,7 +143,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void EncodeToBufferWriter()
+    public void BufferWriterOutput_EncodesYaml()
     {
         using var document = YamlDocument.Parse(Sample);
 
@@ -156,7 +158,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void EveryEntryPointWritesTheSameValueBack()
+    public void EveryEntryPoint_RoundTripsSameValue()
     {
         using var document = YamlDocument.Parse(Sample);
 
@@ -164,8 +166,6 @@ public sealed partial class YamlApiTest
 
         AssertIsSample(fromBytes);
     }
-
-    // Serializer: an object goes to YAML and comes back through the core's conversion.
 
     public enum Color
     {
@@ -209,35 +209,35 @@ public sealed partial class YamlApiTest
     [Theory]
     [InlineData(YamlStringStyle.Quote)]
     [InlineData(YamlStringStyle.Multiline)]
-    public void ObjectRoundTripsThroughYaml(YamlStringStyle mode)
+    public void ObjectSerialization_RoundTripsThroughYaml(YamlStringStyle mode)
     {
-        var source = CreatePerson();
+        var sourcePerson = CreatePerson();
 
-        var yaml = YamlDocument.EncodeToString(
-            DValue.From(source).AsElement(),
+        var yamlFromSource = YamlDocument.EncodeToString(
+            DValue.From(sourcePerson).AsElement(),
             new YamlWriteOptions { StringStyle = mode }
         );
 
-        using var document = YamlDocument.Parse(yaml);
+        using var serializedYamlDocument = YamlDocument.Parse(yamlFromSource);
 
-        var restored = ToObject<Person>(document.RootElement);
+        var restoredPersonFromSerializedYaml = ToObject<Person>(serializedYamlDocument.RootElement);
 
-        Assert.Equal(source.Name, restored.Name);
-        Assert.Equal(source.Age, restored.Age);
-        Assert.Equal(source.Score, restored.Score);
-        Assert.Equal(source.Active, restored.Active);
-        Assert.Null(restored.Optional);
-        Assert.Equal(source.Favorite, restored.Favorite);
-        Debug.Assert(source.Address != null); // CreatePerson sets the address.
-        Debug.Assert(restored.Address != null); // The YAML has the address, so the object has it.
-        Assert.Equal(source.Address.City, restored.Address.City);
-        Assert.Equal(source.Address.Number, restored.Address.Number);
-        Assert.Equal(source.Tags, restored.Tags);
-        Assert.Equal(source.Counts, restored.Counts);
+        Assert.Equal(sourcePerson.Name, restoredPersonFromSerializedYaml.Name);
+        Assert.Equal(sourcePerson.Age, restoredPersonFromSerializedYaml.Age);
+        Assert.Equal(sourcePerson.Score, restoredPersonFromSerializedYaml.Score);
+        Assert.Equal(sourcePerson.Active, restoredPersonFromSerializedYaml.Active);
+        Assert.Null(restoredPersonFromSerializedYaml.Optional);
+        Assert.Equal(sourcePerson.Favorite, restoredPersonFromSerializedYaml.Favorite);
+        Debug.Assert(sourcePerson.Address != null); // CreatePerson sets the address.
+        Debug.Assert(restoredPersonFromSerializedYaml.Address != null); // The YAML has the address, so the object has it.
+        Assert.Equal(sourcePerson.Address.City, restoredPersonFromSerializedYaml.Address.City);
+        Assert.Equal(sourcePerson.Address.Number, restoredPersonFromSerializedYaml.Address.Number);
+        Assert.Equal(sourcePerson.Tags, restoredPersonFromSerializedYaml.Tags);
+        Assert.Equal(sourcePerson.Counts, restoredPersonFromSerializedYaml.Counts);
     }
 
     [Fact]
-    public void ObjectFromHandWrittenYaml()
+    public void HandWrittenYaml_DeserializesObject()
     {
         const string yaml =
             "Name: Ann\nAge: 30\nTags:\n  - a\n  - b\nAddress:\n  City: Oslo\n  Number: 3\n";
@@ -254,21 +254,22 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void ListOfObjectsRoundTrips()
+    public void ObjectList_RoundTripsThroughYaml()
     {
-        var source = new List<Address>
+        var sourceAddresses = new List<Address>
         {
             new() { City = "A", Number = 1 },
             new() { City = "yes", Number = 2 },
         };
 
-        var yaml = YamlDocument.EncodeToString(DValue.From(source).AsElement());
-        using var document = YamlDocument.Parse(yaml);
+        var yamlFromSource = YamlDocument.EncodeToString(DValue.From(sourceAddresses).AsElement());
 
-        var restored = ToObject<List<Address>>(document.RootElement);
+        using var serializedYamlDocument = YamlDocument.Parse(yamlFromSource);
 
-        Assert.Equal(new[] { "A", "yes" }, restored.Select(a => a.City));
-        Assert.Equal(new[] { 1, 2 }, restored.Select(a => a.Number));
+        var restoredAddressesFromYaml = ToObject<List<Address>>(serializedYamlDocument.RootElement);
+
+        Assert.Equal(new[] { "A", "yes" }, restoredAddressesFromYaml.Select(static a => a.City));
+        Assert.Equal(new[] { 1, 2 }, restoredAddressesFromYaml.Select(static a => a.Number));
     }
 
     private static T ToObject<T>(DElement element)

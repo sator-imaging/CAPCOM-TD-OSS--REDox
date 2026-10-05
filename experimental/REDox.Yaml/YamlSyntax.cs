@@ -13,6 +13,19 @@ namespace REDox.Yaml;
 
 internal static partial class YamlSyntax
 {
+    // Numbers as the YAML 1.2 core schema reads them (decimal integers and floats).
+    // Other parsers resolve these as numbers even where this library's parser would not, e.g. ".5" and "5.".
+    [GeneratedRegex(@"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$")]
+    public static partial Regex CoreNumberPattern();
+
+    // The timestamp forms of YAML 1.1
+    // "2001-12-14", "2001-12-14T21:59:43.10-05:00" and "2001-12-14 21:59:43.10 -5".
+    // Groups: 1 year, 2 month, 3 day, 4 hour, 5 minute, 6 second, 7 fraction (without the dot), 8 zone.
+    [GeneratedRegex(
+        @"^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:[Tt]|[ \t]+)([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]*))?(?:[ \t]*(Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?$"
+    )]
+    public static partial Regex TimestampPattern();
+
     // White space and line breaks. YAML knows no other white space: U+3000 and the like are ordinary text.
     public const byte Space = (byte)' ';
     public const byte Tab = (byte)'\t';
@@ -411,10 +424,9 @@ internal static partial class YamlSyntax
 
             // Preserve the control ranges, allowing only LF and TAB within those ranges.
             if (
-                (
-                    character.Value < Space
-                    || character.Value is >= Delete and <= C1ControlLastSecondByte
-                ) && character.Value is not (LineFeed or Tab)
+                character.Value
+                is (< Space or >= Delete and <= C1ControlLastSecondByte)
+                    and not (LineFeed or Tab)
             )
             {
                 return true;
@@ -448,17 +460,4 @@ internal static partial class YamlSyntax
     {
         return value <= byte.MaxValue && IsWhiteSpaceOrLineEnd((byte)value);
     }
-
-    // Numbers as the YAML 1.2 core schema reads them (decimal integers and floats).
-    // Other parsers resolve these as numbers even where this library's parser would not, e.g. ".5" and "5.".
-    [GeneratedRegex(@"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$")]
-    public static partial Regex CoreNumberPattern();
-
-    // The timestamp forms of YAML 1.1
-    // "2001-12-14", "2001-12-14T21:59:43.10-05:00" and "2001-12-14 21:59:43.10 -5".
-    // Groups: 1 year, 2 month, 3 day, 4 hour, 5 minute, 6 second, 7 fraction (without the dot), 8 zone.
-    [GeneratedRegex(
-        @"^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:[Tt]|[ \t]+)([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]*))?(?:[ \t]*(Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?$"
-    )]
-    public static partial Regex TimestampPattern();
 }

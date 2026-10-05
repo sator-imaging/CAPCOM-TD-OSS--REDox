@@ -8,16 +8,20 @@ namespace REDox.Yaml.Tests;
 public sealed partial class YamlApiTest
 {
     [Fact]
-    public void ParseAndEncodeInParallelGiveTheSameResultAsOneThread()
+    public void ParallelParseAndEncode_MatchesSingleThreadedResult()
     {
-        var expected = SingleThreaded();
+        var expected = ParseAndEncodeSampleOnCurrentThread();
 
         var results = Enumerable
             .Range(0, 8)
             .AsParallel()
             .WithDegreeOfParallelism(8)
             .Select(_ =>
-                Enumerable.Range(0, 100).Select(_ => SingleThreaded()).Distinct().ToArray()
+                Enumerable
+                    .Range(0, 100)
+                    .Select(_ => ParseAndEncodeSampleOnCurrentThread())
+                    .Distinct()
+                    .ToArray()
             )
             .ToArray();
 
@@ -25,7 +29,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public async Task StringsThatNeedQuotingAreWrittenInParallelWithoutMixingThemUp()
+    public async Task ParallelQuotedStringWrites_DoNotMixValues()
     {
         var values = new[]
         {
@@ -64,7 +68,7 @@ public sealed partial class YamlApiTest
         await Task.WhenAll(tasks);
     }
 
-    private static string SingleThreaded()
+    private static string ParseAndEncodeSampleOnCurrentThread()
     {
         using var document = YamlDocument.Parse(Sample);
 
@@ -72,7 +76,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void OneDocumentReadByManyThreadsGivesTheSameValues()
+    public void SharedDocumentRead_ReturnsSameValuesAcrossThreads()
     {
         using var document = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
 
@@ -102,17 +106,19 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void OneElementWrittenByManyThreadsGivesTheSameText()
+    public void SharedElementWrite_ReturnsSameTextAcrossThreads()
     {
         using var document = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
 
-        var expected = TextOf(document);
+        var expected = EncodeDocumentAsYamlWithTrivia(document);
 
         var texts = Enumerable
             .Range(0, 8)
             .AsParallel()
             .WithDegreeOfParallelism(8)
-            .SelectMany(_ => Enumerable.Range(0, 100).Select(_ => TextOf(document)))
+            .SelectMany(_ =>
+                Enumerable.Range(0, 100).Select(_ => EncodeDocumentAsYamlWithTrivia(document))
+            )
             .Distinct()
             .ToArray();
 
@@ -120,11 +126,11 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void ParallelDeserializationOfOneDocumentGivesTheSequentialResult()
+    public void ParallelDeserialization_MatchesSequentialResult()
     {
         var persons = Enumerable
             .Range(0, 3000)
-            .Select(index => new Person
+            .Select(static index => new Person
             {
                 Name = $"person {index}: first\nsecond",
                 Age = index,

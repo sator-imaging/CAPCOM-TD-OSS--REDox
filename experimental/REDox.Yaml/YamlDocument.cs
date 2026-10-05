@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Unicode;
+using REDox.Json;
 using REDox.Serialization;
 
 namespace REDox.Yaml;
@@ -51,6 +52,54 @@ public sealed partial class YamlDocument : Document
     }
 
     /// <summary>
+    /// Verifies that this document retains its value when written as JSON, read back, then written and read as YAML.
+    /// </summary>
+    /// <param name="options">How the YAML is written.</param>
+    /// <param name="expectedOriginalElement">An optional source element to compare with the JSON read back.</param>
+    /// <exception cref="DocumentParseException">A conversion changes the parsed value.</exception>
+    public void ValidateJsonYamlRoundTripPreservesValues(
+        YamlWriteOptions options = default,
+        DElement? expectedOriginalElement = null
+    )
+    {
+        var yamlToJson = JsonDocument.EncodeToString(RootElement);
+
+        using var readbackJsonObj = JsonDocument.Parse(yamlToJson, Settings);
+
+        // A loss in JSON must be detected before writing YAML can change the value again.
+        if (!DValue.DeepEquals(RootElement.AsValue(), readbackJsonObj.RootElement.AsValue()))
+        {
+            ThrowParseError(
+                ParseException.ErrorCode.InvalidValue,
+                "Writing and reading JSON changed the YAML value."
+            );
+        }
+
+        if (
+            expectedOriginalElement is { } expected
+            && !DValue.DeepEquals(expected.AsValue(), readbackJsonObj.RootElement.AsValue())
+        )
+        {
+            ThrowParseError(
+                ParseException.ErrorCode.InvalidValue,
+                "The JSON value produced from YAML differs from the expected original value."
+            );
+        }
+
+        var yamlViaReadbackJsonObj = EncodeToString(readbackJsonObj.RootElement, options);
+
+        using var readbackYamlObj = Parse(yamlViaReadbackJsonObj, Settings);
+
+        if (!DValue.DeepEquals(RootElement.AsValue(), readbackYamlObj.RootElement.AsValue()))
+        {
+            ThrowParseError(
+                ParseException.ErrorCode.InvalidValue,
+                "Writing and reading YAML from the parsed JSON changed the original YAML value."
+            );
+        }
+    }
+
+    /// <summary>
     /// Returns the buffer that holds the scalars of the document to the array pool, and then disposes the document as
     /// the base class does. The values of the document cannot be read afterwards.
     /// </summary>
@@ -83,6 +132,7 @@ public sealed partial class YamlDocument : Document
         ArgumentNullException.ThrowIfNull(stream);
 
         var bufferSize = (settings ?? SerializerSettings.Default).DefaultBufferSize;
+
         using var buffer = new YamlPooledBuffer(bufferSize);
 
         int bytesRead;
@@ -152,6 +202,7 @@ public sealed partial class YamlDocument : Document
     )
     {
         var document = new YamlDocument(settings ?? SerializerSettings.Default);
+
         try
         {
             document.Read(utf8Yaml, options);
@@ -201,7 +252,7 @@ public sealed partial class YamlDocument : Document
     /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
     /// <param name="options">How the YAML is written.</param>
     /// <returns>The UTF-8 bytes.</returns>
-    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
+    /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
     public static byte[] Encode(DElement element, YamlWriteOptions options = default)
     {
         using var writer = new Utf8TextWriter(
@@ -223,7 +274,7 @@ public sealed partial class YamlDocument : Document
     /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
     /// <param name="options">How the YAML is written.</param>
     /// <returns>The YAML text.</returns>
-    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
+    /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
     public static string EncodeToString(DElement element, YamlWriteOptions options = default)
     {
         using var writer = new Utf8TextWriter(
@@ -245,7 +296,7 @@ public sealed partial class YamlDocument : Document
     /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
     /// <param name="stream">The stream to write to.</param>
     /// <param name="options">How the YAML is written.</param>
-    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
+    /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
     public static void EncodeTo(DElement element, Stream stream, YamlWriteOptions options = default)
     {
         using var writer = new Utf8TextWriter(
@@ -266,7 +317,7 @@ public sealed partial class YamlDocument : Document
     /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
     /// <param name="bufferWriter">The buffer writer to write to.</param>
     /// <param name="options">How the YAML is written.</param>
-    /// <exception cref="NotSupportedException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
+    /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
     public static void EncodeTo(
         DElement element,
         IBufferWriter<byte> bufferWriter,
@@ -291,6 +342,7 @@ public sealed partial class YamlDocument : Document
 
         // Text that is UTF-8 already is read where it is. Only text in another encoding rents buffer storage.
         using var decodedBuffer = new YamlPooledBuffer(0);
+
         try
         {
             try
@@ -335,7 +387,7 @@ public sealed partial class YamlDocument : Document
             catch (DecoderFallbackException)
             {
                 // Report invalid input as a parse error so that TryParse returns false.
-                ThrowParseError(ParseException.ErrorCode.InvalidFormat);
+                ThrowParseError(ParseException.ErrorCode.InvalidEncoding);
             }
 
             ReadDocument();
@@ -358,9 +410,9 @@ public sealed partial class YamlDocument : Document
 
         var contentOnMarkerLine = false;
         var markerLineStart = 0;
-        if (AtDocumentMarker(_position, YamlSyntax.DocumentStartUtf8))
+        if (IsMarkerAtPosition(_position, YamlSyntax.DocumentStartUtf8))
         {
-            markerLineStart = LastLineStart(_position);
+            markerLineStart = FindCurrentLineStart(_position);
             _position += 3;
 
             SkipInlineSpaces();
@@ -395,7 +447,7 @@ public sealed partial class YamlDocument : Document
         // The root node's parent indentation is -1, so block scalars may start at column 0.
         RootId = ParseNode(0, parentIndent: -1, mapValueOnKeyLine: contentOnMarkerLine);
 
-        if (contentOnMarkerLine && LastLineStart(_position) == markerLineStart)
+        if (contentOnMarkerLine && FindCurrentLineStart(_position) == markerLineStart)
         {
             ExpectLineEnd();
         }
@@ -425,11 +477,14 @@ public sealed partial class YamlDocument : Document
         }
     }
 
-    private static ReadOnlyMemory<byte> RequireValidUtf8(ReadOnlyMemory<byte> text)
+    private ReadOnlyMemory<byte> RequireValidUtf8(ReadOnlyMemory<byte> text)
     {
         if (!Utf8.IsValid(text.Span))
         {
-            ThrowHelper.ThrowDecodeFallback("The text is not valid UTF-8.");
+            ThrowParseError(
+                ParseException.ErrorCode.InvalidEncoding,
+                "The text is not valid UTF-8."
+            );
         }
 
         return text;
@@ -462,8 +517,8 @@ public sealed partial class YamlDocument : Document
             // An explicit key is read by the block map that holds it (see ParseExplicitMapEntry); anywhere else the
             // "?" that stands alone is not supported. "?x" is a plain scalar.
             || IsExplicitKeyStart(flow) && !(blockAllowed && IsExplicitKeyStart(false))
-            || AtDocumentMarker(_position, YamlSyntax.DocumentStartUtf8)
-            || AtDocumentMarker(_position, YamlSyntax.DocumentEndUtf8)
+            || IsMarkerAtPosition(_position, YamlSyntax.DocumentStartUtf8)
+            || IsMarkerAtPosition(_position, YamlSyntax.DocumentEndUtf8)
         )
         {
             ThrowParseError(ParseException.ErrorCode.UnsupportedFeature);
@@ -523,32 +578,13 @@ public sealed partial class YamlDocument : Document
         // A quoted scalar is always a string.
         // A plain key is resolved like a plain value (null, boolean, number, timestamp or string),
         // so "1: a" is a map entry whose key is the integer 1, unless ReadMapKeyAsString is set.
-        if (value.Quoted || (key || isKey) && _parseOptions.ReadMapKeyAsString)
-        {
-            return CommitScalar(DTokenVariant.String, value);
-        }
-
-        if (TryParseNull(value, out var nullId))
-        {
-            return nullId;
-        }
-
-        if (TryParseBoolean(value, out var booleanId))
-        {
-            return booleanId;
-        }
-
-        if (TryParseNumber(value, out var numberId))
-        {
-            return numberId;
-        }
-
-        if (TryParseTimestamp(value, out var timestampId))
-        {
-            return timestampId;
-        }
-
-        return CommitScalar(DTokenVariant.String, value);
+        return value.Quoted || (key || isKey) && _parseOptions.ReadMapKeyAsString
+                ? CommitScalar(DTokenVariant.String, value)
+            : TryParseNull(value, out var nullId) ? nullId
+            : TryParseBoolean(value, out var booleanId) ? booleanId
+            : TryParseNumber(value, out var numberId) ? numberId
+            : TryParseTimestamp(value, out var timestampId) ? timestampId
+            : CommitScalar(DTokenVariant.String, value);
     }
 
     private void ValidateScalarSourceCharacters(int scalarSourceStart)
@@ -558,7 +594,7 @@ public sealed partial class YamlDocument : Document
         //   https://yaml.org/spec/1.2.2/#51-character-set
         // Its JSON compatibility rule also permits non-C0 characters inside quoted scalars.
         // A block scalar is not quoted even though ParsedScalar.Quoted prevents its implicit type resolution.
-        // Validate the source, never ScalarText: double-quoted escapes may legitimately produce NUL
+        // Validate the source, never the decoded scalar buffer: double-quoted escapes may legitimately produce NUL
         // or other non-printable values. UTF-8 has already been checked, so each decoded Rune is valid.
         var isQuotedScalar =
             Source[scalarSourceStart] is YamlSyntax.SingleQuote or YamlSyntax.DoubleQuote;
@@ -607,15 +643,11 @@ public sealed partial class YamlDocument : Document
     /// The scalar buffer, from Start to the end of what is stored, where the reading of the scalar builds them.
     /// Nothing else is stored while a scalar is read.
     /// They become a token with CommitScalar (a number keeps its text, as it was written),
-    /// or are dropped with DiscardScalar (a null and a boolean need no text of their own).
+    /// or are dropped by truncating the scalar buffer (a null and a boolean need no text of their own).
     /// </summary>
     private readonly record struct ParsedScalar(int Start, bool Quoted);
 
     private ParsedScalar BeginScalar(bool quoted) => new(_scalars.Length, quoted);
-
-    private ReadOnlySpan<byte> ScalarText(ParsedScalar scalar) => _scalars.From(scalar.Start);
-
-    private void DiscardScalar(ParsedScalar scalar) => _scalars.TruncateTo(scalar.Start);
 
     private uint CommitScalar(DTokenVariant variant, ParsedScalar scalar)
     {
@@ -642,7 +674,7 @@ public sealed partial class YamlDocument : Document
     /// <summary>
     /// Scalar readers use this span immediately; they must not retain it across scalar buffer growth.
     /// </summary>
-    private ReadOnlySpan<byte> ScalarBytes(DToken token)
+    private ReadOnlySpan<byte> GetStoredScalarBytes(DToken token)
     {
         var (length, offset) = DToken.DecodeLengthOffsetPayload(token);
 
@@ -662,11 +694,11 @@ public sealed partial class YamlDocument : Document
         value is YamlSyntax.CarriageReturn or YamlSyntax.LineFeed;
 
     private bool IsDocumentMarkerAt(int position) =>
-        AtDocumentMarker(position, YamlSyntax.DocumentStartUtf8)
-        || AtDocumentMarker(position, YamlSyntax.DocumentEndUtf8);
+        IsMarkerAtPosition(position, YamlSyntax.DocumentStartUtf8)
+        || IsMarkerAtPosition(position, YamlSyntax.DocumentEndUtf8);
 
     // A marker ends the line or is followed by white space ("--- text").
-    private bool AtDocumentMarker(int position, ReadOnlySpan<byte> marker)
+    private bool IsMarkerAtPosition(int position, ReadOnlySpan<byte> marker)
     {
         var source = Source;
 
@@ -709,6 +741,38 @@ public sealed partial class YamlDocument : Document
         {
             WriteTrailingTrivia(writer, reader, document._trailingTrivia, inlineComment);
         }
+    }
+
+    internal static void WriteCollectionIndicator(Utf8TextWriter writer, bool mapValue)
+    {
+        writer.WriteUtf8Byte(mapValue ? YamlSyntax.MappingValueIndicator : YamlSyntax.Dash);
+        writer.PushIndent();
+    }
+
+    internal static void WriteValueSeparator(Utf8TextWriter writer, bool blockValue)
+    {
+        if (blockValue)
+        {
+            writer.WriteIndentNewLine();
+        }
+        else
+        {
+            writer.WriteUtf8Byte(YamlSyntax.Space);
+        }
+    }
+
+    internal static void WriteEmptyCollection(
+        Utf8TextWriter writer,
+        bool isMap,
+        bool afterIndicator
+    )
+    {
+        if (afterIndicator)
+        {
+            WriteValueSeparator(writer, false);
+        }
+
+        writer.WriteString(isMap ? YamlSyntax.EmptyMappingUtf8 : YamlSyntax.EmptySequenceUtf8);
     }
 
     private static bool WriteNode(
@@ -815,9 +879,12 @@ public sealed partial class YamlDocument : Document
                 break;
 
             default:
-                ThrowHelper.ThrowNotSupported($"YAML does not support {token.Kind} values.");
+                ThrowGenericError(
+                    ParseException.ErrorCode.UnsupportedFeature,
+                    $"YAML does not support {token.Kind} values."
+                );
 
-                break; // Throw helper has DoesNotReturn attribute
+                break;
         }
 
         return blockScalar;

@@ -8,10 +8,10 @@ public sealed partial class YamlDocument
     // A boolean needs no text of its own, so the bytes of the scalar are dropped.
     private bool TryParseBoolean(ParsedScalar scalar, out uint tokenId)
     {
-        var text = ScalarText(scalar);
+        var text = _scalars.GetWrittenSpanFromOffset(scalar.Start);
         if (YamlSyntax.TryParseBooleanScalar(text, out var value))
         {
-            DiscardScalar(scalar);
+            _scalars.TruncateTo(scalar.Start);
 
             tokenId = AllocToken(
                 DToken.Make(value ? DTokenVariant.BooleanTrue : DTokenVariant.BooleanFalse, 0)

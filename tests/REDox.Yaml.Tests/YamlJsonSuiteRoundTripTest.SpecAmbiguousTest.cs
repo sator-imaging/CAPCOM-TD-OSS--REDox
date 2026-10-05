@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
@@ -7,35 +7,39 @@ public sealed partial class YamlJsonSuiteRoundTripTest
 {
     [Theory]
     [MemberData(nameof(GetSpecAmbiguousJsonFiles))]
-    public void IsRejectedByTheJsonReaderOrSurvivesYaml(string filePath)
+    public void SpecAmbiguousJsonFile_IsRejectedOrSurvivesYamlConversion(string filePath)
     {
-        string yaml;
+        var sourceJsonBytes = File.ReadAllBytes(filePath);
+        string yamlFromJson;
 
-        // The JSON reader may reject the file (a DocumentParseException). If it accepts it, the YAML written from it must
-        // be read back, and written as JSON again, without any exception. The value need not be equal. The core validates
-        // lazily, so the JSON reader can reject the file while the YAML is written as well as when it reads the file: both
-        // are inside the try.
+        // The JSON specification permits either accepting or rejecting these i_* files. A JSON rejection ends this
+        // case without exercising YAML. The core validates lazily, so rejection can occur during YAML writing too.
+        // For accepted files this checks only that the YAML parses: ambiguous values may change, and no value
+        // comparison is made here.
         try
         {
-            using var source = JsonDocument.Parse(File.ReadAllBytes(filePath));
+            using var sourceJsonDocument = JsonDocument.Parse(sourceJsonBytes);
 
-            yaml = YamlDocument.EncodeToString(source.RootElement);
+            yamlFromJson = YamlDocument.EncodeToString(sourceJsonDocument.RootElement);
         }
-        catch (DocumentParseException)
+        catch (DocumentParseException exception)
         {
+            YamlTestHelper.AssertParseErrorCameFromJsonDocument(exception, sourceJsonBytes);
+
             return;
         }
 
-        using var parsed = YamlDocument.Parse(yaml);
-
-        var json = JsonDocument.EncodeToString(parsed.RootElement);
-        using var restored = JsonDocument.Parse(json);
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
     }
 
     public static TheoryData<string> GetSpecAmbiguousJsonFiles()
     {
-        return new TheoryData<string>(
+        var cases = new TheoryData<string>(
             YamlTestHelper.GetJsonSuiteFiles(YamlTestHelper.JsonSuiteSpecAmbiguousPattern)
         );
+
+        Assert.Equal(35, cases.Count);
+
+        return cases;
     }
 }

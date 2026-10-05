@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Text;
 
@@ -16,19 +16,18 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void DefaultOutputIsIndentedByTwoSpaces()
+    public void DefaultOutput_UsesTwoSpaceIndentationAndIndentsMapAfterBareDash()
     {
         var yaml = Encode(Nested, new YamlWriteOptions { NewLine = "\n" });
 
         Assert.Equal("a:\n  b:\n    c: 1\nlist:\n  - x\n  -\n    k: 2\n", yaml);
     }
 
-    // A map inside a list starts on the line after the dash, one level deeper.
     [Theory]
     [InlineData(1, "a:\n b:\n  c: 1\nlist:\n - x\n -\n  k: 2\n")]
     [InlineData(2, "a:\n  b:\n    c: 1\nlist:\n  - x\n  -\n    k: 2\n")]
     [InlineData(4, "a:\n    b:\n        c: 1\nlist:\n    - x\n    -\n        k: 2\n")]
-    public void IndentSizeIsTheWidthOfEachLevel(int size, string expected)
+    public void ConfiguredIndentSize_IndentsEachLevelAndMapAfterBareDash(int size, string expected)
     {
         var yaml = Encode(Nested, new YamlWriteOptions { NewLine = "\n", IndentSize = size });
 
@@ -39,26 +38,33 @@ public sealed partial class YamlOptionsTest
     [InlineData(1)]
     [InlineData(3)]
     [InlineData(8)]
-    public void IndentedOutputReadsBackToTheSameValue(int size)
+    public void ConfiguredIndentation_RoundTripsValue(int size)
     {
         var yaml = Encode(Nested, new YamlWriteOptions { IndentSize = size });
 
-        YamlTestHelper.ParsesAs(yaml, "{\"a\":{\"b\":{\"c\":1}},\"list\":[\"x\",{\"k\":2}]}");
+        YamlTestHelper.AssertYamlParsesAsJsonValueAndRoundTrips(
+            yaml,
+            "{\"a\":{\"b\":{\"c\":1}},\"list\":[\"x\",{\"k\":2}]}"
+        );
     }
 
     [Fact]
-    public void IndentSizeOutOfRangeIsRefused()
+    public void OutOfRangeIndentSize_Throws()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new YamlWriteOptions { IndentSize = -1 });
-        Assert.Throws<ArgumentOutOfRangeException>(() => new YamlWriteOptions { IndentSize = 128 });
+        Assert.Throws<ArgumentOutOfRangeException>(static () =>
+            new YamlWriteOptions { IndentSize = -1 }
+        );
+
+        Assert.Throws<ArgumentOutOfRangeException>(static () =>
+            new YamlWriteOptions { IndentSize = 128 }
+        );
     }
 
-    // YAML does not allow a tab as indentation, so the output never holds one at the start of a line.
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(4)]
-    public void IndentationIsAlwaysSpaces(int size)
+    public void Indentation_UsesSpacesInsteadOfTabs(int size)
     {
         var yaml = Encode(Nested, new YamlWriteOptions { NewLine = "\n", IndentSize = size });
 
@@ -68,7 +74,7 @@ public sealed partial class YamlOptionsTest
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ByteOrderMarkIsWrittenOnlyWhenRequested(bool writeBom)
+    public void ByteOrderMark_WritesOnlyWhenRequested(bool writeBom)
     {
         using var document = YamlDocument.Parse("a: 1\n");
 
@@ -85,7 +91,7 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void ByteOrderMarkIsWrittenByEveryEntryPoint()
+    public void ByteOrderMark_WritesFromEveryEntryPoint()
     {
         using var document = YamlDocument.Parse("a: 1\n");
 
@@ -103,7 +109,6 @@ public sealed partial class YamlOptionsTest
         Assert.True(buffer.WrittenSpan.StartsWith(Encoding.UTF8.Preamble));
     }
 
-    // The root is depth 0, and every value below it, a scalar included, is one deeper.
     [Theory]
     [InlineData("1", 0, true)]
     [InlineData("[1]", 1, true)]
@@ -113,7 +118,11 @@ public sealed partial class YamlOptionsTest
     [InlineData("a:\n  b: 1\n", 1, false)]
     [InlineData("{a: {b: 1}}", 2, true)]
     [InlineData("{a: {b: 1}}", 1, false)]
-    public void MaxDepthAllowsExactlyTheLimit(string yaml, int maxDepth, bool allowed)
+    public void MaxDepth_CountsRootAsZeroAndEnforcesConfiguredLimit(
+        string yaml,
+        int maxDepth,
+        bool allowed
+    )
     {
         var options = new YamlDocumentOptions { MaxDepth = maxDepth };
 
@@ -125,14 +134,15 @@ public sealed partial class YamlOptionsTest
         }
         else
         {
-            Assert.ThrowsAny<DocumentParseException>(() =>
-                YamlDocument.Parse(yaml, options: options)
+            YamlTestHelper.AssertYamlParseError(
+                () => YamlDocument.Parse(yaml, options: options),
+                "MaxDepthExceeded"
             );
         }
     }
 
     [Fact]
-    public void MaxDepthZeroMeansNoLimit()
+    public void ZeroMaxDepth_AllowsUnlimitedDepth()
     {
         var yaml = new string('[', 200) + new string(']', 200);
 
@@ -149,12 +159,13 @@ public sealed partial class YamlOptionsTest
     [InlineData("{a: 1, a: 2}")]
     [InlineData("x:\n  a: 1\n  a: 2\n")]
     [InlineData("- {a: 1, a: 2}\n")]
-    public void ValidationRejectsRepeatedKeysInEveryMapStyle(string yaml)
+    public void RepeatedKeysInAnyMapStyle_ValidationRejects(string yaml)
     {
         var validating = new YamlDocumentOptions { EnableValueValidation = true };
 
-        Assert.ThrowsAny<DocumentParseException>(() =>
-            YamlDocument.Parse(yaml, options: validating)
+        YamlTestHelper.AssertYamlParseError(
+            () => YamlDocument.Parse(yaml, options: validating),
+            "DuplicateKey"
         );
 
         using var lenient = YamlDocument.Parse(yaml);
@@ -166,7 +177,7 @@ public sealed partial class YamlOptionsTest
     [InlineData("a: 1\nb:\n  a: 2\n")]
     [InlineData("a: 1\nb: [{a: 2}]\n")]
     [InlineData("{a: 1, b: 2}")]
-    public void ValidationAllowsTheSameKeyInDifferentMaps(string yaml)
+    public void SameKeyInDifferentMaps_ValidationAllows(string yaml)
     {
         using var document = YamlDocument.Parse(
             yaml,
@@ -180,7 +191,7 @@ public sealed partial class YamlOptionsTest
     [InlineData("a: 1\nb: \"\"\n")]
     [InlineData("a: 'text'\nb: ''\n")]
     [InlineData("a: [\"\", x]\n")]
-    public void ValidationKeepsAnEmptyQuotedString(string yaml)
+    public void EmptyQuotedString_ValidationAccepts(string yaml)
     {
         using var document = YamlDocument.Parse(
             yaml,
@@ -194,7 +205,7 @@ public sealed partial class YamlOptionsTest
     [InlineData("a:\nb: 1\n")]
     [InlineData("a: ~\n")]
     [InlineData("- \n- 1\n")]
-    public void ValidationKeepsAnEmptyValueAsNull(string yaml)
+    public void EmptyValue_ValidationAcceptsAsNull(string yaml)
     {
         using var document = YamlDocument.Parse(
             yaml,
@@ -214,7 +225,7 @@ public sealed partial class YamlOptionsTest
     // A line with leading spaces is more indented, so a folded scalar keeps its line breaks.
     [InlineData(0, ">1-\n  a\n  b\n", " a\n b")]
     [InlineData(-1, ">1-\n  a\n  b\n", "  a\n  b")]
-    public void RootIndentationLevelSetsWhereTheIndicatorOfARootBlockScalarCounts(
+    public void RootIndentationLevel_SetsBlockScalarIndicatorOrigin(
         int rootIndentationLevel,
         string yaml,
         string expected
@@ -229,18 +240,17 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void RootIndentationLevelDefaultsToZero()
+    public void RootIndentationLevel_DefaultsToZero()
     {
         Assert.Equal(0, new YamlDocumentOptions().RootIndentationLevel);
         Assert.Equal(0, default(YamlDocumentOptions).RootIndentationLevel);
     }
 
-    // A block scalar below a key is not at the root, so RootIndentationLevel has no effect on it.
     [Theory]
     [InlineData(-1)]
     [InlineData(0)]
     [InlineData(3)]
-    public void RootIndentationLevelDoesNotChangeANestedBlockScalar(int rootIndentationLevel)
+    public void RootIndentationLevel_DoesNotChangeBlockScalarBelowMapKey(int rootIndentationLevel)
     {
         using var document = YamlDocument.Parse(
             "a: |2-\n    indented\n",
@@ -251,15 +261,16 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void RootIndentationLevelLessThanMinusOneIsRefused()
+    public void RootIndentationLevelBelowMinusOne_Throws()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new YamlDocumentOptions { RootIndentationLevel = -2 }
+        YamlTestHelper.AssertYamlParseError(
+            static () => new YamlDocumentOptions { RootIndentationLevel = -2 },
+            "InvalidOption"
         );
     }
 
     [Fact]
-    public void ReplacedValueIsWritten()
+    public void ReplacedValue_WritesUpdatedContent()
     {
         using var document = YamlDocument.Parse("a: 1\nb: two\n");
 
@@ -272,7 +283,7 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void AddedValueIsWrittenAfterTheExistingOnes()
+    public void AddedValue_WritesAfterExistingValues()
     {
         using var document = YamlDocument.Parse("a: 1\n");
 
@@ -285,7 +296,7 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void AddedStringThatLooksLikeAnotherTypeIsQuoted()
+    public void AddedStringLookingLikeAnotherType_WritesQuoted()
     {
         using var document = YamlDocument.Parse("a: 1\n");
 
@@ -293,6 +304,7 @@ public sealed partial class YamlOptionsTest
         document.RootElement.AsObject().Add("c", DValue.Create("2001-12-14"));
 
         var yaml = YamlDocument.EncodeToString(document.RootElement, NewLineLf);
+
         using var parsed = YamlDocument.Parse(yaml);
 
         Assert.Equal("true", parsed.RootElement.GetProperty("b").GetString());
@@ -300,7 +312,7 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void ListEditsAreWritten()
+    public void ListEdits_WriteUpdatedContent()
     {
         using var document = YamlDocument.Parse("- 1\n- 2\n- 3\n");
 
@@ -318,7 +330,7 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void EditedDocumentReadsBackAsEdited()
+    public void EditedDocument_ReadsBackWithEdits()
     {
         using var document = YamlDocument.Parse("a:\n  b: 1\nlist: [1, 2]\n");
 
@@ -326,14 +338,14 @@ public sealed partial class YamlOptionsTest
 
         document.RootElement.GetProperty("list").AsArray().Add(DValue.Create(3));
 
-        YamlTestHelper.ParsesAs(
+        YamlTestHelper.AssertYamlParsesAsJsonValueAndRoundTrips(
             YamlDocument.EncodeToString(document.RootElement),
             "{\"a\":{\"b\":\"x: y\"},\"list\":[1,2,3]}"
         );
     }
 
     [Fact]
-    public void EditingTheDuplicateLeavesTheOriginalAlone()
+    public void EditingDuplicate_LeavesOriginalUnchanged()
     {
         using var original = YamlDocument.Parse("a: 1\nlist:\n  - x\ntext: hello\n");
         using var duplicate = original.Duplicate();
@@ -353,7 +365,7 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void EditingTheOriginalLeavesTheDuplicateAlone()
+    public void EditingOriginal_LeavesDuplicateUnchanged()
     {
         using var original = YamlDocument.Parse("a: 1\nlist:\n  - x\ntext: hello\n");
         using var duplicate = original.Duplicate();
@@ -370,9 +382,10 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void DuplicateWritesTheSameTextAsTheOriginal()
+    public void Duplicate_WritesSameTextAsOriginal()
     {
         const string yaml = "# head\na: 1 # one\nb:\n  - 'x'\n  - 2001-12-14\n";
+
         using var original = YamlDocument.Parse(
             yaml,
             options: new YamlDocumentOptions { PreserveTrivia = true }
@@ -388,5 +401,5 @@ public sealed partial class YamlOptionsTest
         );
     }
 
-    private static readonly YamlWriteOptions NewLineLf = new YamlWriteOptions { NewLine = "\n" };
+    private static readonly YamlWriteOptions NewLineLf = new() { NewLine = "\n" };
 }
