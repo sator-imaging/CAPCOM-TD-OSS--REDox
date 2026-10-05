@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 
 namespace REDox.Yaml.Tests;
@@ -21,16 +21,17 @@ public sealed partial class YamlApiTest
         PreserveTrivia = true,
     };
 
-    private static string TextOf(YamlDocument document) =>
+    private static string EncodeDocumentAsYamlWithTrivia(YamlDocument document) =>
         YamlDocument.EncodeToString(document.RootElement, TriviaWriteOptions);
 
     // The original is disposed: its buffers go back to the pool, which another document may take. The duplicate has
     // buffers of its own, so it still holds every value.
     [Fact]
-    public void DuplicateHoldsEveryKindOfValueAfterTheOriginalIsDisposed()
+    public void DisposedOriginal_DuplicateRetainsEveryValueKind()
     {
         var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
-        var expected = TextOf(original);
+        var expected = EncodeDocumentAsYamlWithTrivia(original);
+
         using var duplicate = original.Duplicate();
 
         original.Dispose();
@@ -40,7 +41,7 @@ public sealed partial class YamlApiTest
             "name: 0123456789\nnumber: 0123456789\nlist: [0123456789, 0123456789, 0123456789]\n"
         );
 
-        Assert.Equal(expected, TextOf(duplicate));
+        Assert.Equal(expected, EncodeDocumentAsYamlWithTrivia(duplicate));
         Assert.Equal("text", duplicate.RootElement.GetProperty("name").GetString());
         Assert.Equal(42, duplicate.RootElement.GetProperty("number").GetInt64());
         Assert.Equal(1.5, duplicate.RootElement.GetProperty("float").GetDouble());
@@ -70,7 +71,7 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void DuplicateHoldsKeysOfOtherTypesAfterTheOriginalIsDisposed()
+    public void DisposedOriginal_DuplicateRetainsNonStringKeys()
     {
         var original = YamlDocument.Parse(
             "1: integer\ntrue: boolean\n2001-12-14: date\ntext: string\n"
@@ -88,70 +89,73 @@ public sealed partial class YamlApiTest
                 DTokenKind.Timestamp,
                 DTokenKind.String,
             },
-            duplicate.RootElement.AsMap().Select(pair => pair.Key.AsElement().Token.Kind)
+            duplicate.RootElement.AsMap().Select(static pair => pair.Key.AsElement().Token.Kind)
         );
 
         Assert.Equal(
             new[] { "integer", "boolean", "date", "string" },
-            duplicate.RootElement.AsMap().Select(pair => pair.Value.AsElement().GetString())
+            duplicate.RootElement.AsMap().Select(static pair => pair.Value.AsElement().GetString())
         );
     }
 
     [Fact]
-    public void DisposingTheDuplicateLeavesTheOriginalAlone()
+    public void DisposedDuplicate_OriginalRemainsUsable()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
 
-        var expected = TextOf(original);
+        var expected = EncodeDocumentAsYamlWithTrivia(original);
         var duplicate = original.Duplicate();
 
         duplicate.Dispose();
 
-        Assert.Equal(expected, TextOf(original));
+        Assert.Equal(expected, EncodeDocumentAsYamlWithTrivia(original));
     }
 
     [Fact]
-    public void DuplicateOfADuplicateIsIndependent()
+    public void DuplicateOfDuplicate_RemainsIndependent()
     {
         var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
-        var expected = TextOf(original);
+        var expected = EncodeDocumentAsYamlWithTrivia(original);
         var first = original.Duplicate();
+
         using var second = first.Duplicate();
 
         original.Dispose();
         first.Dispose();
 
-        Assert.Equal(expected, TextOf(second));
+        Assert.Equal(expected, EncodeDocumentAsYamlWithTrivia(second));
     }
 
     [Fact]
-    public void RemovingFromTheDuplicateLeavesTheOriginalAlone()
+    public void RemovingFromDuplicate_LeavesOriginalUnchanged()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
 
-        var expected = TextOf(original);
+        var expected = EncodeDocumentAsYamlWithTrivia(original);
+
         using var duplicate = original.Duplicate();
 
         Assert.True(duplicate.RootElement.AsObject().Remove("number"));
         duplicate.RootElement.GetProperty("list").AsArray().RemoveAt(0);
         duplicate.RootElement.GetProperty("nested").AsObject().Remove("key");
 
-        Assert.Equal(expected, TextOf(original));
+        Assert.Equal(expected, EncodeDocumentAsYamlWithTrivia(original));
         Assert.False(duplicate.RootElement.AsObject().ContainsKey("number"));
         Assert.Equal(2, duplicate.RootElement.GetProperty("list").GetArrayLength());
     }
 
     [Fact]
-    public void ReplacingListItemsInTheDuplicateLeavesTheOriginalAlone()
+    public void ReplacingDuplicateListItems_LeavesOriginalUnchanged()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
 
-        var expected = TextOf(original);
+        var expected = EncodeDocumentAsYamlWithTrivia(original);
+
         using var duplicate = original.Duplicate();
 
         duplicate.RootElement.GetProperty("list").AsArray()[0] = DValue.Create("replaced");
 
-        Assert.Equal(expected, TextOf(original));
+        Assert.Equal(expected, EncodeDocumentAsYamlWithTrivia(original));
         Assert.Equal(
             "replaced",
             duplicate.RootElement.GetProperty("list").AsArray()[0].AsElement().GetString()
@@ -159,11 +163,12 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void EditingNestedValuesOfTheDuplicateLeavesTheOriginalAlone()
+    public void EditingDuplicateNestedValues_LeavesOriginalUnchanged()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
 
-        var expected = TextOf(original);
+        var expected = EncodeDocumentAsYamlWithTrivia(original);
+
         using var duplicate = original.Duplicate();
 
         duplicate.RootElement.GetProperty("nested").AsObject()["key"] = DValue.Create("changed");
@@ -175,7 +180,7 @@ public sealed partial class YamlApiTest
             .AsArray()
             .Add(DValue.Create(7));
 
-        Assert.Equal(expected, TextOf(original));
+        Assert.Equal(expected, EncodeDocumentAsYamlWithTrivia(original));
         Assert.Equal(
             "changed",
             duplicate.RootElement.GetProperty("nested").GetProperty("key").GetString()
@@ -183,11 +188,12 @@ public sealed partial class YamlApiTest
     }
 
     [Fact]
-    public void EditingNestedValuesOfTheOriginalLeavesTheDuplicateAlone()
+    public void EditingOriginalNestedValues_LeavesDuplicateUnchanged()
     {
         using var original = YamlDocument.Parse(DuplicateSource, options: TriviaParseOptions);
 
-        var expected = TextOf(original);
+        var expected = EncodeDocumentAsYamlWithTrivia(original);
+
         using var duplicate = original.Duplicate();
 
         original.RootElement.GetProperty("nested").AsObject()["key"] = DValue.Create("changed");
@@ -201,6 +207,6 @@ public sealed partial class YamlApiTest
 
         original.RootElement.GetProperty("list").AsArray().RemoveAt(0);
 
-        Assert.Equal(expected, TextOf(duplicate));
+        Assert.Equal(expected, EncodeDocumentAsYamlWithTrivia(duplicate));
     }
 }

@@ -1,4 +1,5 @@
-﻿using REDox.Cbor;
+﻿using System;
+using REDox.Cbor;
 using REDox.MessagePack;
 
 namespace REDox.Yaml.Tests;
@@ -24,47 +25,134 @@ public sealed partial class YamlFormatConversionTest
     private static readonly YamlWriteOptions LineFeedOptions = new() { NewLine = "\n" };
 
     [Fact]
-    public void CborByteStringBecomesAString()
+    public void CborByteStringToYaml_WritesString()
     {
-        using var document = CborDocument.Parse(CborByteString);
+        using var cborDocument = CborDocument.Parse(CborByteString);
 
-        var yaml = YamlDocument.EncodeToString(document.RootElement, LineFeedOptions);
+        var yamlFromCbor = YamlDocument.EncodeToString(cborDocument.RootElement, LineFeedOptions);
 
-        Assert.Equal("AQID\n", yaml);
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromCbor);
 
-        using var parsed = YamlDocument.Parse(yaml);
-
-        Assert.Equal(DTokenKind.String, parsed.RootElement.Token.Kind);
+        Assert.Equal(DTokenKind.String, convertedYamlDocument.RootElement.Token.Kind);
+        Assert.True(
+            DValue.DeepEquals(DValue.Create("AQID"), convertedYamlDocument.RootElement.AsValue())
+        );
     }
 
     [Fact]
-    public void MessagePackBinBecomesAString()
+    public void MessagePackBinaryValueToYaml_WritesString()
     {
-        using var document = MessagePackDocument.Parse(MessagePackBin);
+        using var messagePackDocument = MessagePackDocument.Parse(MessagePackBin);
 
-        var yaml = YamlDocument.EncodeToString(document.RootElement, LineFeedOptions);
+        var yamlFromMessagePack = YamlDocument.EncodeToString(
+            messagePackDocument.RootElement,
+            LineFeedOptions
+        );
 
-        Assert.Equal("AQID\n", yaml);
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromMessagePack);
 
-        using var parsed = YamlDocument.Parse(yaml);
-
-        Assert.Equal(DTokenKind.String, parsed.RootElement.Token.Kind);
+        Assert.Equal(DTokenKind.String, convertedYamlDocument.RootElement.Token.Kind);
+        Assert.True(
+            DValue.DeepEquals(DValue.Create("AQID"), convertedYamlDocument.RootElement.AsValue())
+        );
     }
 
     [Fact]
-    public void ByteStringInsideACollectionBecomesAString()
+    public void BinaryValueInsideCollectionToYaml_WritesString()
     {
-        using var cbor = CborDocument.Parse(CborArrayOfByteString);
-        using var messagePack = MessagePackDocument.Parse(MessagePackArrayOfBin);
+        using var cborDocument = CborDocument.Parse(CborArrayOfByteString);
+        using var messagePackDocument = MessagePackDocument.Parse(MessagePackArrayOfBin);
 
-        Assert.Equal(
-            "- 1\n- AQID\n",
-            YamlDocument.EncodeToString(cbor.RootElement, LineFeedOptions)
+        using var yamlFromCborDocument = YamlDocument.Parse(
+            YamlDocument.EncodeToString(cborDocument.RootElement, LineFeedOptions)
         );
 
-        Assert.Equal(
-            "- 1\n- AQID\n",
-            YamlDocument.EncodeToString(messagePack.RootElement, LineFeedOptions)
+        using var yamlFromMessagePackDocument = YamlDocument.Parse(
+            YamlDocument.EncodeToString(messagePackDocument.RootElement, LineFeedOptions)
         );
+
+        var expectedYamlArray = new DArray(1, "AQID");
+
+        // Binary values lose their binary type in YAML; compare the values after YAML has parsed them as strings.
+        Assert.True(
+            DValue.DeepEquals(
+                expectedYamlArray.AsElement().AsValue(),
+                yamlFromCborDocument.RootElement.AsValue()
+            )
+        );
+
+        Assert.True(
+            DValue.DeepEquals(
+                expectedYamlArray.AsElement().AsValue(),
+                yamlFromMessagePackDocument.RootElement.AsValue()
+            )
+        );
+    }
+
+    // MessagePack keeps the offset of a DateTimeOffset in a list next to the timestamp. YAML does not combine them: the
+    // list is written as it is, with the timestamp as a timestamp without an offset, so the offset is the number of
+    // minutes that follows, and the timestamp reads in the assumed time zone like any timestamp without an offset.
+    [Fact]
+    public void MessagePackOffsetToYaml_PreservesListAndUsesAssumedTimeZone()
+    {
+        var value = new DateTimeOffset(2001, 12, 14, 21, 59, 43, TimeSpan.FromHours(9));
+        var tokyo = TimeZoneInfo.CreateCustomTimeZone(
+            "Tokyo",
+            TimeSpan.FromHours(9),
+            "Tokyo",
+            "Tokyo"
+        );
+
+        var yamlFromMessagePack = ConvertElementToYamlViaBinaryFormat(
+            "messagepack",
+            DValue.Create(value).AsElement()
+        );
+
+        using var yamlWithUtcTimeZone = YamlDocument.Parse(yamlFromMessagePack);
+
+        Assert.Equal(2, yamlWithUtcTimeZone.RootElement.GetArrayLength());
+        Assert.Equal(
+            DTokenKind.Timestamp,
+            yamlWithUtcTimeZone.RootElement.AsArray()[0].AsElement().Token.Kind
+        );
+
+        var yamlDateTimeUtc = yamlWithUtcTimeZone
+            .RootElement.AsArray()[0]
+            .AsElement()
+            .GetDateTimeOffset();
+
+        Assert.Equal(value.DateTime, yamlDateTimeUtc.DateTime);
+        Assert.Equal(TimeSpan.Zero, yamlDateTimeUtc.Offset);
+
+        using var yamlWithTokyoTimeZone = YamlDocument.Parse(
+            yamlFromMessagePack,
+            options: new YamlDocumentOptions { AssumedTimeZone = tokyo }
+        );
+
+        var yamlDateTimeTokyo = yamlWithTokyoTimeZone
+            .RootElement.AsArray()[0]
+            .AsElement()
+            .GetDateTimeOffset();
+
+        Assert.Equal(value, yamlDateTimeTokyo);
+        Assert.Equal(value.DateTime, yamlDateTimeTokyo.DateTime);
+        Assert.Equal(540, yamlDateTimeTokyo.Offset.TotalMinutes);
+        Assert.Equal(540, yamlWithUtcTimeZone.RootElement.AsArray()[1].AsElement().GetInt64());
+    }
+
+    // CBOR's "undefined" (0xf7) has no YAML form of its own: it is a null.
+    [Fact]
+    public void CborUndefinedToYaml_WritesNull()
+    {
+        using var cborDocument = CborDocument.Parse([0xf7]);
+
+        var yamlFromCbor = YamlDocument.EncodeToString(
+            cborDocument.RootElement,
+            new YamlWriteOptions { NewLine = "\n" }
+        );
+
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromCbor);
+
+        Assert.Equal(DTokenKind.Null, convertedYamlDocument.RootElement.Token.Kind);
     }
 }

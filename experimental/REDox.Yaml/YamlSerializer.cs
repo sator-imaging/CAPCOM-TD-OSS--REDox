@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 namespace REDox.Yaml;
@@ -24,7 +24,7 @@ public sealed class YamlSerializer : Serializer
     {
         settings ??= SerializerSettings.Default;
 
-        using var cache = Helper.InstanceCache<YamlWriter>.Get(() => new YamlWriter());
+        using var cache = Helper.InstanceCache<YamlWriter>.Get(static () => new YamlWriter());
 
         var writer = cache.Value;
 

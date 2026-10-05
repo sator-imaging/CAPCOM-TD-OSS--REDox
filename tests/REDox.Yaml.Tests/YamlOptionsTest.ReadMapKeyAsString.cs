@@ -1,10 +1,9 @@
-﻿using System.Linq;
+using System.Linq;
 
 namespace REDox.Yaml.Tests;
 
 public sealed partial class YamlOptionsTest
 {
-    // ReadMapKeyAsString reads every key as the text it is written with, however the key is written.
     [Theory]
     [InlineData("1: a\n", "1")]
     [InlineData("1.50: a\n", "1.50")]
@@ -22,7 +21,7 @@ public sealed partial class YamlOptionsTest
     [InlineData("? null\n: a\n", "null")]
     [InlineData("? 2001-12-14\n: a\n", "2001-12-14")]
     [InlineData("? 1\n  2\n: a\n", "1 2")]
-    public void ReadMapKeyAsStringReadsEveryKeyAsItsText(string yaml, string key)
+    public void ReadMapKeyAsString_ReadsEveryKeyAsText(string yaml, string key)
     {
         using var document = YamlDocument.Parse(
             yaml,
@@ -40,7 +39,7 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void ReadMapKeyAsStringLetsGetPropertyFindTheKey()
+    public void ReadMapKeyAsString_AllowsGetPropertyToFindKey()
     {
         using var document = YamlDocument.Parse(
             "1: a\ntrue: b\n",
@@ -52,7 +51,7 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void ReadMapKeyAsStringIsOffByDefault()
+    public void ReadMapKeyAsString_DefaultsToDisabled()
     {
         Assert.False(new YamlDocumentOptions().ReadMapKeyAsString);
 
@@ -65,14 +64,16 @@ public sealed partial class YamlOptionsTest
     }
 
     [Fact]
-    public void ReadMapKeyAsStringLeavesTheValuesAlone()
+    public void ReadMapKeyAsString_LeavesValuesUnchanged()
     {
         using var document = YamlDocument.Parse(
             "1: 2\ntrue: false\n? 3\n: null\n",
             options: new YamlDocumentOptions { ReadMapKeyAsString = true }
         );
 
-        var kinds = document.RootElement.AsMap().Select(pair => pair.Value.AsElement().Token.Kind);
+        var kinds = document
+            .RootElement.AsMap()
+            .Select(static pair => pair.Value.AsElement().Token.Kind);
 
         Assert.Equal(new[] { DTokenKind.Integer, DTokenKind.Boolean, DTokenKind.Null }, kinds);
     }
@@ -83,13 +84,17 @@ public sealed partial class YamlOptionsTest
     [InlineData("{? : a}")]
     [InlineData("{?, b: c}")]
     [InlineData("[? : a]")]
-    public void ReadMapKeyAsStringRefusesAKeyWithNoText(string yaml)
+    public void ReadMapKeyAsString_RejectsKeyWithoutTextWhileDefaultReadsNullKey(string yaml)
     {
-        Assert.ThrowsAny<DocumentParseException>(() =>
-            YamlDocument.Parse(yaml, options: new YamlDocumentOptions { ReadMapKeyAsString = true })
+        YamlTestHelper.AssertYamlParseError(
+            () =>
+                YamlDocument.Parse(
+                    yaml,
+                    options: new YamlDocumentOptions { ReadMapKeyAsString = true }
+                ),
+            "MissingStringKey"
         );
 
-        // Without the option the same text has a null key.
         using var document = YamlDocument.Parse(yaml);
 
         Assert.True(document.RootElement.IsValid);

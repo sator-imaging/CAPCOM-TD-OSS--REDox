@@ -12,7 +12,7 @@ public sealed partial class YamlTimestampTest
     [InlineData("2001-12-14T21:59:43Z", DTokenVariant.TimestampOffsetDateTime)]
     [InlineData("2001-12-14t21:59:43.10-05:00", DTokenVariant.TimestampOffsetDateTime)]
     [InlineData("2001-12-14 21:59:43.10 -5", DTokenVariant.TimestampOffsetDateTime)]
-    public void PlainTimestampsAreTimestamps(string text, DTokenVariant variant)
+    public void PlainTimestamp_ParsesAsTimestamp(string text, DTokenVariant variant)
     {
         using var document = YamlDocument.Parse(text);
 
@@ -31,21 +31,19 @@ public sealed partial class YamlTimestampTest
     [InlineData("12:30")]
     [InlineData("\"2001-12-14\"")]
     [InlineData("'2001-12-14'")]
-    public void OtherTextsStayStrings(string yaml)
+    public void InvalidOrQuotedTimestampText_ParsesAsString(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         Assert.Equal(DTokenKind.String, document.RootElement.Token.Kind);
     }
 
-    // A string that reads as a timestamp is written quoted, or it would come back as a timestamp. A text that only
-    // looks like one (not a real date) stays a string and needs no quotes.
     [Theory]
     [InlineData("2001-12-14", false)]
     [InlineData("2001-12-14T21:59:43.10Z", false)]
     [InlineData("2001-12-14 21:59:43.10 -5", false)]
     [InlineData("2001-13-45", true)]
-    public void StringThatLooksLikeTimestampIsQuotedOnlyWhenItIsOne(string value, bool plain)
+    public void TimestampLookingString_QuotesOnlyWhenRequired(string value, bool plain)
     {
         var yaml = YamlDocument.EncodeToString(
             DValue.Create(value).AsElement(),
@@ -59,8 +57,6 @@ public sealed partial class YamlTimestampTest
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
-    // The text is never normalized: spacing, the separator, the case of T and Z, and a fraction longer than a
-    // DateTime can hold all come back as they were written.
     [Theory]
     [InlineData("2001-12-14")]
     [InlineData("2001-1-1")]
@@ -70,9 +66,10 @@ public sealed partial class YamlTimestampTest
     [InlineData("2001-12-14T21:59:43.1234567890123Z")]
     [InlineData("2001-12-14T21:59:43.Z")]
     [InlineData("2001-12-14T21:59:43")]
-    public void TimestampsRoundTripAsWritten(string timestamp)
+    public void TimestampText_RoundTripsWithoutNormalization(string timestamp)
     {
         var yaml = "map:\n  key: " + timestamp + "\nlist:\n  - " + timestamp + "\n";
+
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(
@@ -84,7 +81,7 @@ public sealed partial class YamlTimestampTest
     }
 
     [Fact]
-    public void RootTimestampRoundTripsAsWritten()
+    public void RootTimestamp_RoundTripsAsWritten()
     {
         using var document = YamlDocument.Parse("2001-12-14 21:59:43.10 -5\n");
 
@@ -97,7 +94,7 @@ public sealed partial class YamlTimestampTest
     }
 
     [Fact]
-    public void OffsetTimestampIsReadWithItsOffset()
+    public void OffsetTimestamp_ReadsWithItsOffset()
     {
         using var document = YamlDocument.Parse("2001-12-14 21:59:43.10 -5");
 
@@ -108,7 +105,7 @@ public sealed partial class YamlTimestampTest
     }
 
     [Fact]
-    public void TimestampWithoutOffsetIsUtcByDefault()
+    public void TimestampWithoutOffset_DefaultsToUtc()
     {
         using var document = YamlDocument.Parse("2001-12-14 21:59:43");
 
@@ -119,7 +116,7 @@ public sealed partial class YamlTimestampTest
     }
 
     [Fact]
-    public void TimestampWithoutOffsetUsesTheGivenTimeZone()
+    public void AssumedTimeZone_AffectsOffsetlessTimestampValueWithoutChangingTextOrExplicitOffset()
     {
         var tokyo = TimeZoneInfo.CreateCustomTimeZone(
             "Tokyo",
@@ -163,7 +160,7 @@ public sealed partial class YamlTimestampTest
     }
 
     [Fact]
-    public void TimestampOfAnotherFormatIsWrittenAndReadBack()
+    public void TimestampFromAnotherFormat_WritesAndReadsBack()
     {
         var value = new DateTimeOffset(2001, 12, 14, 21, 59, 43, TimeSpan.FromHours(9));
 

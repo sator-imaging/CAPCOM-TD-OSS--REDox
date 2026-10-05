@@ -28,7 +28,7 @@ public sealed partial class YamlDocument
     {
         tokenId = 0;
 
-        var text = ScalarText(scalar);
+        var text = _scalars.GetWrittenSpanFromOffset(scalar.Start);
         if (
             !StartsLikeTimestamp(text)
             || !YamlTimestampHelper.TryGetKind(Encoding.UTF8.GetString(text), out var kind)
@@ -62,7 +62,7 @@ public sealed partial class YamlDocument
     protected override DateTime DecodeDateTime(DToken token)
     {
         return YamlTimestampHelper.ToDateTime(
-            Encoding.UTF8.GetString(ScalarBytes(token)),
+            Encoding.UTF8.GetString(GetStoredScalarBytes(token)),
             AssumedTimeZone
         );
     }
@@ -71,7 +71,7 @@ public sealed partial class YamlDocument
     protected override DateTimeOffset DecodeDateTimeOffset(DToken token)
     {
         return YamlTimestampHelper.ToDateTimeOffset(
-            Encoding.UTF8.GetString(ScalarBytes(token)),
+            Encoding.UTF8.GetString(GetStoredScalarBytes(token)),
             AssumedTimeZone
         );
     }
@@ -82,7 +82,7 @@ public sealed partial class YamlDocument
 
         if (reader.Document is YamlDocument document && !token.IsExtended)
         {
-            writer.WriteString(document.ScalarBytes(token));
+            writer.WriteString(document.GetStoredScalarBytes(token));
 
             return;
         }

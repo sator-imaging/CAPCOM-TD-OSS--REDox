@@ -8,7 +8,11 @@ namespace REDox.Yaml;
 
 internal static class YamlTimestampHelper
 {
-    private readonly record struct Parts(DateTime WallClock, TimeSpan? Offset, TimestampKind Kind);
+    private readonly record struct ParsedTimestampParts(
+        DateTime WallClock,
+        TimeSpan? Offset,
+        TimestampKind Kind
+    );
 
     /// <summary>
     /// Decides whether a text is a timestamp. This only looks at the text: nothing is converted or normalized.
@@ -50,24 +54,25 @@ internal static class YamlTimestampHelper
     public static DateTime ToDateTime(string text, TimeZoneInfo unspecifiedOffsetTimeZone)
     {
         var parts = ParseOrThrow(text);
-        if (parts.Offset.HasValue)
-        {
-            return new DateTimeOffset(parts.WallClock, parts.Offset.Value).UtcDateTime;
-        }
 
-        return unspecifiedOffsetTimeZone == TimeZoneInfo.Utc
-            ? DateTime.SpecifyKind(parts.WallClock, DateTimeKind.Utc)
+        return parts.Offset.HasValue
+                ? new DateTimeOffset(parts.WallClock, parts.Offset.Value).UtcDateTime
+            : unspecifiedOffsetTimeZone == TimeZoneInfo.Utc
+                ? DateTime.SpecifyKind(parts.WallClock, DateTimeKind.Utc)
             : parts.WallClock;
     }
 
-    private static Parts ParseOrThrow(string text)
+    private static ParsedTimestampParts ParseOrThrow(string text)
     {
         return TryParse(text, out var parts)
             ? parts
-            : throw new FormatException($"'{text}' is not a YAML timestamp.");
+            : throw YamlDocument.GenericError(
+                YamlDocument.ParseException.ErrorCode.InvalidValue,
+                $"'{text}' is not a YAML timestamp."
+            );
     }
 
-    private static bool TryParse(string text, out Parts parts)
+    private static bool TryParse(string text, out ParsedTimestampParts parts)
     {
         parts = default;
 
@@ -90,7 +95,7 @@ internal static class YamlTimestampHelper
         var wallClock = new DateTime(year, month, day);
         if (!match.Groups[4].Success)
         {
-            parts = new Parts(wallClock, null, TimestampKind.LocalDate);
+            parts = new ParsedTimestampParts(wallClock, null, TimestampKind.LocalDate);
 
             return true;
         }
@@ -115,7 +120,7 @@ internal static class YamlTimestampHelper
 
         if (!match.Groups[8].Success)
         {
-            parts = new Parts(wallClock, null, TimestampKind.LocalDateTime);
+            parts = new ParsedTimestampParts(wallClock, null, TimestampKind.LocalDateTime);
 
             return true;
         }
@@ -125,7 +130,7 @@ internal static class YamlTimestampHelper
             return false;
         }
 
-        parts = new Parts(wallClock, offset, TimestampKind.OffsetDateTime);
+        parts = new ParsedTimestampParts(wallClock, offset, TimestampKind.OffsetDateTime);
 
         return true;
     }

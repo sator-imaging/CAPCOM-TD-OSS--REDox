@@ -10,84 +10,117 @@ public sealed class YamlSimdjsonRoundTripTest
 {
     [Theory]
     [MemberData(nameof(GetJsonFiles))]
-    public void JsonRoundTripsThroughYaml(string filePath)
+    public void NumberNestingAndUnicodeSimdjsonDatasets_RoundTripThroughYaml(string filePath)
     {
-        var bytes = File.ReadAllBytes(filePath);
-        using var source = JsonDocument.Parse(bytes);
+        var sourceJsonBytes = File.ReadAllBytes(filePath);
+
+        using var sourceJsonDocument = JsonDocument.Parse(sourceJsonBytes);
 
         foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
-            string yaml;
-            try
+            if (mode == YamlStringStyle.Quote)
             {
-                yaml = YamlDocument.EncodeToString(
-                    source.RootElement,
-                    new YamlWriteOptions { StringStyle = mode }
+                YamlTestHelper.AssertJsonYamlJsonRoundTripPreservesValues(
+                    sourceJsonDocument,
+                    new YamlWriteOptions { StringStyle = mode },
+                    Path.GetFileName(filePath)
                 );
-            }
-            catch (NotSupportedException) when (mode == YamlStringStyle.Multiline)
-            {
-                YamlTestHelper.AssertMultilineRefusalIsJustified(bytes, Path.GetFileName(filePath));
 
                 continue;
             }
 
-            using var parsed = YamlDocument.Parse(yaml);
-            using var restored = JsonDocument.Parse(
-                JsonDocument.EncodeToString(parsed.RootElement)
-            );
+            string yamlFromJson;
 
+            try
+            {
+                yamlFromJson = YamlDocument.EncodeToString(
+                    sourceJsonDocument.RootElement,
+                    new YamlWriteOptions { StringStyle = mode }
+                );
+            }
+            catch (DocumentParseException exception) when (mode == YamlStringStyle.Multiline)
+            {
+                YamlTestHelper.AssertMultilineStyleRefusalReportsUnsupportedFeatureAndJsonHasUnrepresentableStringValue(
+                    exception,
+                    sourceJsonBytes,
+                    Path.GetFileName(filePath)
+                );
+
+                continue;
+            }
+
+            using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
+
+            // Compare with the JSON reader before another JSON conversion can hide a YAML value change.
             Assert.True(
-                DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
-                $"YAML round-trip changed {Path.GetFileName(filePath)} in {mode} mode."
+                DValue.DeepEquals(
+                    sourceJsonDocument.RootElement.AsValue(),
+                    convertedYamlDocument.RootElement.AsValue()
+                ),
+                $"YAML changed {Path.GetFileName(filePath)} in {mode} mode."
             );
         }
     }
 
     [Theory]
     [MemberData(nameof(GetJsonFiles))]
-    public void YamlOutputIsStable(string filePath)
+    public void SimdjsonDataset_PreservesParsedValueAndStableYamlSpelling(string filePath)
     {
-        using var source = JsonDocument.Parse(File.ReadAllBytes(filePath));
+        using var sourceJsonDocument = JsonDocument.Parse(File.ReadAllBytes(filePath));
 
         var options = new YamlWriteOptions { NewLine = "\n" };
 
-        var yaml = YamlDocument.EncodeToString(source.RootElement, options);
-        using var parsed = YamlDocument.Parse(yaml);
+        var yamlFromJson = YamlDocument.EncodeToString(sourceJsonDocument.RootElement, options);
 
-        var again = YamlDocument.EncodeToString(parsed.RootElement, options);
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
 
         Assert.True(
-            yaml == again,
+            DValue.DeepEquals(
+                sourceJsonDocument.RootElement.AsValue(),
+                convertedYamlDocument.RootElement.AsValue()
+            ),
+            $"YAML changed {Path.GetFileName(filePath)}."
+        );
+
+        var yamlWrittenAgain = YamlDocument.EncodeToString(
+            convertedYamlDocument.RootElement,
+            options
+        );
+
+        // This assertion checks stable YAML spelling; DeepEquals above checks the parsed data.
+        Assert.True(
+            yamlFromJson == yamlWrittenAgain,
             $"Writing the YAML of {Path.GetFileName(filePath)} a second time changed it."
         );
     }
 
     [Fact]
-    public void EveryLineOfTheNdjsonFileRoundTripsThroughYaml()
+    public void NdjsonDatasetLines_RoundTripThroughYaml()
     {
         var path = Path.Combine(FindDataDirectory(), "amazon_cellphones.ndjson");
-        var lines = File.ReadLines(path).Where(line => line.Length > 0).ToArray();
+        var lines = File.ReadLines(path).Where(static line => line.Length > 0).ToArray();
 
         Assert.NotEmpty(lines);
 
         for (var index = 0; index < lines.Length; index++)
         {
-            using var source = JsonDocument.Parse(lines[index]);
+            using var sourceJsonDocument = JsonDocument.Parse(lines[index]);
 
             foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
             {
-                string yaml;
+                string yamlFromJson;
+
                 try
                 {
-                    yaml = YamlDocument.EncodeToString(
-                        source.RootElement,
+                    yamlFromJson = YamlDocument.EncodeToString(
+                        sourceJsonDocument.RootElement,
                         new YamlWriteOptions { StringStyle = mode }
                     );
                 }
-                catch (NotSupportedException) when (mode == YamlStringStyle.Multiline)
+                catch (DocumentParseException exception) when (mode == YamlStringStyle.Multiline)
                 {
-                    YamlTestHelper.AssertMultilineRefusalIsJustified(
+                    YamlTestHelper.AssertMultilineStyleRefusalReportsUnsupportedFeatureAndJsonHasUnrepresentableStringValue(
+                        exception,
                         Encoding.UTF8.GetBytes(lines[index]),
                         $"line {index + 1} of the ndjson file"
                     );
@@ -95,14 +128,14 @@ public sealed class YamlSimdjsonRoundTripTest
                     continue;
                 }
 
-                using var parsed = YamlDocument.Parse(yaml);
-                using var restored = JsonDocument.Parse(
-                    JsonDocument.EncodeToString(parsed.RootElement)
-                );
+                using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
 
                 Assert.True(
-                    DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
-                    $"YAML round-trip changed line {index + 1} of the ndjson file in {mode} mode."
+                    DValue.DeepEquals(
+                        sourceJsonDocument.RootElement.AsValue(),
+                        convertedYamlDocument.RootElement.AsValue()
+                    ),
+                    $"YAML changed line {index + 1} of the ndjson file in {mode} mode."
                 );
             }
         }

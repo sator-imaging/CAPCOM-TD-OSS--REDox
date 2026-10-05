@@ -9,7 +9,7 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
-    private int LastLineStart(int position)
+    private int FindCurrentLineStart(int position)
     {
         var searched = Math.Min(Source.Length, Math.Max(1, position));
         var previous = Source[..searched].LastIndexOf(YamlSyntax.LineFeed);
@@ -130,7 +130,7 @@ public sealed partial class YamlDocument
 
     private bool IndentationContainsTab(int position)
     {
-        for (var index = LastLineStart(position); index < position; index++)
+        for (var index = FindCurrentLineStart(position); index < position; index++)
         {
             if (Source[index] == YamlSyntax.Tab)
             {
@@ -220,7 +220,7 @@ public sealed partial class YamlDocument
         var position = _position;
         while (position < Source.Length)
         {
-            var lineStart = LastLineStart(position);
+            var lineStart = FindCurrentLineStart(position);
             var indent = CountIndent(lineStart);
             position = Math.Max(position, lineStart + indent);
 
@@ -279,7 +279,7 @@ public sealed partial class YamlDocument
     /// <inheritdoc />
     protected override ReadOnlySpan<byte> DecodeTrivia(DToken token)
     {
-        return ScalarBytes(token);
+        return GetStoredScalarBytes(token);
     }
 
     // Detects the '[whitespace without a line break][line comment]' pair that starts a trivia sequence.

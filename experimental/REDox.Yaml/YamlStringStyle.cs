@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
-using System;
-
 namespace REDox.Yaml;
 
 /// <summary>
@@ -22,7 +20,7 @@ public enum YamlStringStyle
     /// Every string value is written as a literal block scalar (<c>|</c>, <c>|-</c> or <c>|+</c>, chosen by the line
     /// breaks at the end of the string), line by line. A string that a block scalar cannot hold, one with a control
     /// character other than the line feed and the tab, makes the writing methods throw a
-    /// <see cref="NotSupportedException" />.
+    /// <see cref="DocumentParseException" />.
     /// </summary>
     Multiline,
 }

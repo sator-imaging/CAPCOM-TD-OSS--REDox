@@ -8,8 +8,9 @@ namespace REDox.Yaml.Tests;
 
 public sealed partial class YamlSpecConformanceTest
 {
-    // Every case in yaml-test-suite runs unless it is excluded here, so a case that starts to work is covered
-    // without any change. Case IDs name a case directory; subcases keep their numeric component (e.g. "KH5V/00").
+    // Excluded cases produce no theory rows. Their behavior can change without this test noticing until an ID is
+    // removed. The case counts below only guard which cases are selected, not the behavior of excluded cases.
+    // Case IDs name a case directory; subcases keep their numeric component (e.g. "KH5V/00").
     // Every group is a YAML feature the library does not support on purpose. A case that is in scope but fails
     // belongs in a group of its own, named after what is missing, so that this list doubles as the to-do list:
     // delete an ID once its case passes.
@@ -141,39 +142,39 @@ public sealed partial class YamlSpecConformanceTest
 
     [Theory]
     [MemberData(nameof(GetCases))]
-    public void CaseMatchesExpectedJsonOrFails(string caseId)
+    public void SpecSuiteCase_MatchesExpectedValueOrFails(string caseId)
     {
         var caseDirectory = Path.Combine(
             FindSuiteDirectory(),
             caseId.Replace('/', Path.DirectorySeparatorChar)
         );
 
-        var yaml = File.ReadAllText(Path.Combine(caseDirectory, "in.yaml"));
+        var sourceYaml = File.ReadAllText(Path.Combine(caseDirectory, "in.yaml"));
         if (File.Exists(Path.Combine(caseDirectory, "error")))
         {
-            Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse(yaml));
+            Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse(sourceYaml));
 
             return;
         }
 
-        using var actualDocument = YamlDocument.Parse(yaml);
+        using var parsedYamlDocument = YamlDocument.Parse(sourceYaml);
 
         var jsonPath = Path.Combine(caseDirectory, "in.json");
 
         // An empty in.json means the stream holds no document, which has no value to compare with.
         if (File.Exists(jsonPath) && new FileInfo(jsonPath).Length == 0)
         {
-            YamlTestHelper.IsEmptyDocument(actualDocument);
+            YamlTestHelper.AssertEmptyYamlDocumentHasNullRoot(parsedYamlDocument);
 
             return;
         }
 
         // Without in.json the value cannot be written as JSON (a null key, for one). The expected output of the case,
-        // out.yaml or emit.yaml, is read the same way and must hold the same value. A case with neither is only checked
-        // for being a valid document.
+        // out.yaml or emit.yaml, is read the same way and must hold the same value. With neither expected file,
+        // there is no reference value: validity alone cannot detect a wrong parsed value.
         if (!File.Exists(jsonPath))
         {
-            Assert.True(actualDocument.IsValid);
+            Assert.True(parsedYamlDocument.IsValid);
 
             var expectedPath = new[] { "out.yaml", "emit.yaml" }
                 .Select(name => Path.Combine(caseDirectory, name))
@@ -181,12 +182,12 @@ public sealed partial class YamlSpecConformanceTest
 
             if (expectedPath != null)
             {
-                using var expectedDocument = YamlDocument.Parse(File.ReadAllText(expectedPath));
+                using var expectedYamlDocument = YamlDocument.Parse(File.ReadAllText(expectedPath));
 
                 Assert.True(
                     DValue.DeepEquals(
-                        expectedDocument.RootElement.AsValue(),
-                        actualDocument.RootElement.AsValue()
+                        expectedYamlDocument.RootElement.AsValue(),
+                        parsedYamlDocument.RootElement.AsValue()
                     ),
                     $"YAML suite case {caseId} does not hold the value of {Path.GetFileName(expectedPath)}."
                 );
@@ -195,21 +196,26 @@ public sealed partial class YamlSpecConformanceTest
             return;
         }
 
-        using var expected = JsonDocument.Parse(File.ReadAllBytes(jsonPath));
-        using var actual = JsonDocument.Parse(
-            JsonDocument.EncodeToString(actualDocument.RootElement)
+        using var expectedJsonDocument = JsonDocument.Parse(File.ReadAllBytes(jsonPath));
+        using var yamlAsJsonDocument = JsonDocument.Parse(
+            JsonDocument.EncodeToString(parsedYamlDocument.RootElement)
         );
 
         Assert.True(
-            DValue.DeepEquals(expected.RootElement.AsValue(), actual.RootElement.AsValue()),
+            DValue.DeepEquals(
+                expectedJsonDocument.RootElement.AsValue(),
+                yamlAsJsonDocument.RootElement.AsValue()
+            ),
             $"YAML suite case {caseId} changed its value."
         );
     }
 
     public static TheoryData<string> GetCases()
     {
+        var suiteDirectory = FindSuiteDirectory();
+        var suiteCaseCount = 0;
         var cases = new TheoryData<string>();
-        foreach (var directory in Directory.EnumerateDirectories(FindSuiteDirectory()).Order())
+        foreach (var directory in Directory.EnumerateDirectories(suiteDirectory).Order())
         {
             var id = Path.GetFileName(directory);
 
@@ -221,6 +227,8 @@ public sealed partial class YamlSpecConformanceTest
 
             if (File.Exists(Path.Combine(directory, "in.yaml")))
             {
+                suiteCaseCount++;
+
                 if (!ExcludedCases.Contains(id))
                 {
                     cases.Add(id);
@@ -232,15 +240,21 @@ public sealed partial class YamlSpecConformanceTest
             foreach (var subcase in Directory.EnumerateDirectories(directory).Order())
             {
                 var subcaseId = $"{id}/{Path.GetFileName(subcase)}";
-                if (
-                    File.Exists(Path.Combine(subcase, "in.yaml"))
-                    && !ExcludedCases.Contains(subcaseId)
-                )
+                if (File.Exists(Path.Combine(subcase, "in.yaml")))
                 {
-                    cases.Add(subcaseId);
+                    suiteCaseCount++;
+
+                    if (!ExcludedCases.Contains(subcaseId))
+                    {
+                        cases.Add(subcaseId);
+                    }
                 }
             }
         }
+
+        // Count through the same path as discovery; recursive enumeration also follows suite tag links.
+        Assert.Equal(402, suiteCaseCount);
+        Assert.Equal(295, cases.Count);
 
         return cases;
     }

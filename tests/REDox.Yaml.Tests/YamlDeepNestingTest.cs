@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 
 namespace REDox.Yaml.Tests;
 
@@ -7,7 +7,7 @@ public sealed class YamlDeepNestingTest
     private const int Depth = 300;
 
     [Fact]
-    public void DeeplyNestedCollectionsRoundTrip()
+    public void DeeplyNestedCollections_RoundTrip()
     {
         var blockMaps = new StringBuilder();
         for (var level = 0; level < Depth; level++)
@@ -48,6 +48,7 @@ public sealed class YamlDeepNestingTest
         Assert.Equal(expectedDepth, DepthOf(document.RootElement));
 
         var written = YamlDocument.EncodeToString(document.RootElement);
+
         using var restored = YamlDocument.Parse(written);
 
         Assert.Equal(expectedDepth, DepthOf(restored.RootElement));

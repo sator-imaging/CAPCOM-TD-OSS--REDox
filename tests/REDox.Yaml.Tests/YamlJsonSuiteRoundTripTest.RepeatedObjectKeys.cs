@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Linq;
 using REDox.Json;
 
@@ -17,32 +17,42 @@ public sealed partial class YamlJsonSuiteRoundTripTest
 
     [Theory]
     [MemberData(nameof(GetDuplicateKeyFiles))]
-    public void DuplicateJsonKeysRoundTripWithValidationDisabled(string filePath)
+    public void DuplicateJsonKeysWithValidationDisabled_RoundTrip(string filePath)
     {
-        using var source = JsonDocument.Parse(File.ReadAllBytes(filePath));
+        using var sourceJsonDocument = JsonDocument.Parse(File.ReadAllBytes(filePath));
 
         foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
-            var yaml = YamlDocument.EncodeToString(
-                source.RootElement,
+            var yamlFromJson = YamlDocument.EncodeToString(
+                sourceJsonDocument.RootElement,
                 new YamlWriteOptions { StringStyle = mode }
             );
 
             // JSON permits repeated member names; disable YAML key validation to retain every entry.
-            using var parsed = YamlDocument.Parse(
-                yaml,
+            using var convertedYamlDocument = YamlDocument.Parse(
+                yamlFromJson,
                 options: new YamlDocumentOptions { EnableValueValidation = false }
             );
 
-            var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);
-            using var restored = JsonDocument.Parse(restoredJson);
+            // DeepEquals resolves each map entry by key, so duplicate names can resolve to the same occurrence
+            // and hide a changed or reordered entry. This test must preserve every occurrence and its position.
+            var sourceJsonMap = sourceJsonDocument.RootElement.AsMap();
+            var convertedYamlMap = convertedYamlDocument.RootElement.AsMap();
 
-            // DeepEquals looks up map values by key, so it cannot compare repeated keys entry by entry.
-            // Compare both public JSON outputs to preserve every repeated key and its position.
-            Assert.Equal(
-                JsonDocument.EncodeToString(source.RootElement),
-                JsonDocument.EncodeToString(restored.RootElement)
-            );
+            Assert.Equal(sourceJsonMap.Count, convertedYamlMap.Count);
+
+            for (var index = 0; index < sourceJsonMap.Count; index++)
+            {
+                Assert.True(
+                    DValue.DeepEquals(sourceJsonMap[index].Key, convertedYamlMap[index].Key),
+                    $"YAML changed key {index} of {Path.GetFileName(filePath)} in {mode} mode."
+                );
+
+                Assert.True(
+                    DValue.DeepEquals(sourceJsonMap[index].Value, convertedYamlMap[index].Value),
+                    $"YAML changed value {index} of {Path.GetFileName(filePath)} in {mode} mode."
+                );
+            }
         }
     }
 

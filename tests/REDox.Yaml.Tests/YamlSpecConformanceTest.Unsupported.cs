@@ -1,51 +1,52 @@
-﻿using System;
-
 namespace REDox.Yaml.Tests;
 
 public sealed partial class YamlSpecConformanceTest
 {
     [Theory]
-    [InlineData("&anchor value")]
-    [InlineData("*alias")]
-    [InlineData("!tag value")]
-    [InlineData("%YAML 1.2")]
+    [InlineData("&anchor value", "UnsupportedFeature")]
+    [InlineData("*alias", "UnsupportedFeature")]
+    [InlineData("!tag value", "UnsupportedFeature")]
+    [InlineData("%YAML 1.2", "UnsupportedFeature")]
     // A collection as a key (a scalar key, explicit or not, is supported)
-    [InlineData("? - a\n  - b\n: value\n")]
-    [InlineData("?\n- a\n: value\n")]
-    [InlineData("? [a, b]\n: value\n")]
-    [InlineData("? { a: b }\n: value\n")]
-    [InlineData("? a: b\n: value\n")]
-    [InlineData("[a, b]: value\n")]
-    [InlineData("{ a: b }: value\n")]
-    [InlineData("first\n---\nsecond\n")]
-    [InlineData("a: [1, 2")]
+    [InlineData("? - a\n  - b\n: value\n", "UnsupportedFeature")]
+    [InlineData("?\n- a\n: value\n", "UnsupportedFeature")]
+    [InlineData("? [a, b]\n: value\n", "UnsupportedFeature")]
+    [InlineData("? { a: b }\n: value\n", "UnsupportedFeature")]
+    [InlineData("? a: b\n: value\n", "UnsupportedFeature")]
+    // These leave extra text after the root node, so the parser reports an invalid structure.
+    [InlineData("[a, b]: value\n", "InvalidFormat")]
+    [InlineData("{ a: b }: value\n", "InvalidFormat")]
+    [InlineData("first\n---\nsecond\n", "InvalidFormat")]
+    [InlineData("a: [1, 2", "InvalidFormat")]
     // An indentation indicator that is larger than the indentation of the lines: the lines are not part of the scalar
-    [InlineData("a: |5\n  text\n")]
-    [InlineData("a: >3\n  text\n")]
+    [InlineData("a: |5\n  text\n", "InvalidFormat")]
+    [InlineData("a: >3\n  text\n", "InvalidFormat")]
     // A leading empty line with more spaces than the content indentation of the indicator
-    [InlineData("a: |2\n     \n  text\n")]
+    [InlineData("a: |2\n     \n  text\n", "InvalidString")]
     // An indentation indicator is one digit from 1 to 9
-    [InlineData("a: |10\n  text\n")]
-    [InlineData("a: |0\n  text\n")]
-    [InlineData("a: b: c\n")]
-    [InlineData("a: - b\n")]
-    public void UnsupportedOrMalformedSyntaxFails(string yaml)
+    [InlineData("a: |10\n  text\n", "InvalidString")]
+    [InlineData("a: |0\n  text\n", "InvalidString")]
+    [InlineData("a: b: c\n", "InvalidFormat")]
+    [InlineData("a: - b\n", "InvalidFormat")]
+    public void UnsupportedOrMalformedSyntax_FailsParsing(string yaml, string expectedCode)
     {
-        Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse(yaml));
+        YamlTestHelper.AssertYamlParseError(() => YamlDocument.Parse(yaml), expectedCode);
     }
 
     [Fact]
-    public void TryParseReturnsFalseForInvalidUtf8()
+    public void InvalidUtf8_TryParseReturnsFalse()
     {
         Assert.False(YamlDocument.TryParse([0x61, 0x3a, 0x20, 0xff], out var document));
         Assert.Null(document);
     }
 
     [Fact]
-    public void DepthLimitFails()
+    public void ExceededDepthLimit_FailsParsing()
     {
-        Assert.ThrowsAny<DocumentParseException>(() =>
-            YamlDocument.Parse("[[1]]", options: new YamlDocumentOptions { MaxDepth = 1 })
+        YamlTestHelper.AssertYamlParseError(
+            static () =>
+                YamlDocument.Parse("[[1]]", options: new YamlDocumentOptions { MaxDepth = 1 }),
+            "MaxDepthExceeded"
         );
     }
 
@@ -55,34 +56,41 @@ public sealed partial class YamlSpecConformanceTest
     [InlineData("a\0b")]
     [InlineData("|\n  a\0b\n")]
     [InlineData(">\n  a\0b\n")]
-    public void ValidationRejectsRawNullInScalarSource(string yaml)
+    public void RawNullInScalarSource_ValidationRejects(string yaml)
     {
         var options = new YamlDocumentOptions { EnableValueValidation = true };
 
-        Assert.ThrowsAny<DocumentParseException>(() => YamlDocument.Parse(yaml, options: options));
-    }
-
-    [Fact]
-    public void ValidationRejectsDuplicateKeys()
-    {
-        Assert.ThrowsAny<DocumentParseException>(() =>
-            YamlDocument.Parse(
-                "a: 1\na: 2\n",
-                options: new YamlDocumentOptions { EnableValueValidation = true }
-            )
+        YamlTestHelper.AssertYamlParseError(
+            () => YamlDocument.Parse(yaml, options: options),
+            "InvalidString"
         );
     }
 
     [Fact]
-    public void MultilineRejectsUnrepresentableControlCharacter()
+    public void DuplicateKeys_ValidationRejects()
+    {
+        YamlTestHelper.AssertYamlParseError(
+            static () =>
+                YamlDocument.Parse(
+                    "a: 1\na: 2\n",
+                    options: new YamlDocumentOptions { EnableValueValidation = true }
+                ),
+            "DuplicateKey"
+        );
+    }
+
+    [Fact]
+    public void UnrepresentableControlCharacter_MultilineStyleRejects()
     {
         var value = DValue.Create("a\rb").AsElement();
 
-        Assert.ThrowsAny<NotSupportedException>(() =>
-            YamlDocument.EncodeToString(
-                value,
-                new YamlWriteOptions { StringStyle = YamlStringStyle.Multiline }
-            )
+        YamlTestHelper.AssertYamlParseError(
+            () =>
+                YamlDocument.EncodeToString(
+                    value,
+                    new YamlWriteOptions { StringStyle = YamlStringStyle.Multiline }
+                ),
+            "UnsupportedFeature"
         );
 
         YamlDocument.EncodeToString(

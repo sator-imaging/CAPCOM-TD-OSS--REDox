@@ -35,7 +35,7 @@ internal static class YamlStringHelper
         // Strings made only of dashes, digits and dots that do not read as another type (such as the version "1.2.3")
         // are written plain. They are checked first because the rules below quote anything that starts with an
         // indicator, a digit or a dot.
-        if (IsDashDigitDot(value))
+        if (IsDashDigitDotTextWithoutYamlIndicators(value))
         {
             return !ReadsAsAnotherType(value);
         }
@@ -104,7 +104,7 @@ internal static class YamlStringHelper
     }
 
     // Only dashes, digits and dots, and not a lone "-" or the document markers "---" and "...", which are indicators.
-    private static bool IsDashDigitDot(ReadOnlySpan<byte> value)
+    private static bool IsDashDigitDotTextWithoutYamlIndicators(ReadOnlySpan<byte> value)
     {
         return !value.ContainsAnyExcept(YamlSyntax.DashDigitDot)
             && !value.SequenceEqual(YamlSyntax.DashTextUtf8)

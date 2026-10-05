@@ -4,11 +4,79 @@ namespace REDox.Yaml.Tests;
 
 public sealed class YamlAllSupportedFeaturesTest
 {
-    // Every syntax and every literal that the reader supports, in one document. The writer writes a value in its own
-    // form (a number without its underscores, a block scalar as a quoted string), so the text that is written is not
-    // compared: the document that is read back from it must be equal to the document that was read from this one.
     [Fact]
-    public void EverySupportedSyntaxAndLiteralReadsBackAsTheSameDocument()
+    public void GitHubActionsWorkflow_RoundTripsAndPreservesValues()
+    {
+        const string githubWorkflowSample = """
+            name: Node.js CI
+
+            on:
+              push:
+                branches: [ main, dev ]
+
+            jobs:
+              build:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: actions/checkout@v4
+                  - uses: actions/setup-node@v4
+                    with:
+                      node-version: 18
+                  - run: npm ci
+                  - run: npm test
+            """;
+
+        using var sourceYamlDocument = YamlDocument.Parse(
+            githubWorkflowSample,
+            options: new YamlDocumentOptions()
+            {
+                // Prevent reading 'on' as a boolean
+                ReadMapKeyAsString = true,
+            }
+        );
+
+        var serializedYaml = YamlDocument.EncodeToString(sourceYamlDocument.RootElement);
+
+        using var restoredYamlDocument = YamlDocument.Parse(serializedYaml);
+
+        Assert.True(
+            DValue.DeepEquals(
+                sourceYamlDocument.RootElement.AsValue(),
+                restoredYamlDocument.RootElement.AsValue()
+            ),
+            $"The workflow changed after writing and reading YAML:\n{serializedYaml}"
+        );
+
+        var workflow = restoredYamlDocument.RootElement.AsValue();
+
+        // xUnit2000 asks for the constant as the first argument.
+        // Suppress it for readability.
+#pragma warning disable xUnit2000
+        Assert.Equal(workflow.Count, 3);
+        Assert.Equal(workflow["name"].AsString(), "Node.js CI");
+        Assert.Equal(workflow["on"].Count, 1);
+        Assert.Equal(workflow["on"]["push"].Count, 1);
+        Assert.Equal(workflow["on"]["push"]["branches"].Count, 2);
+        Assert.Equal(workflow["on"]["push"]["branches"][0].AsString(), "main");
+        Assert.Equal(workflow["on"]["push"]["branches"][1].AsString(), "dev");
+        Assert.Equal(workflow["jobs"].Count, 1);
+        Assert.Equal(workflow["jobs"]["build"].Count, 2);
+        Assert.Equal(workflow["jobs"]["build"]["runs-on"].AsString(), "ubuntu-latest");
+
+        var steps = workflow["jobs"]["build"]["steps"];
+
+        Assert.Equal(steps.Count, 4);
+        Assert.Equal(steps[0]["uses"].AsString(), "actions/checkout@v4");
+        Assert.Equal(steps[1]["uses"].AsString(), "actions/setup-node@v4");
+        Assert.Equal(steps[1]["with"].Count, 1);
+        Assert.Equal(steps[1]["with"]["node-version"].AsInt32(), 18);
+        Assert.Equal(steps[2]["run"].AsString(), "npm ci");
+        Assert.Equal(steps[3]["run"].AsString(), "npm test");
+#pragma warning restore xUnit2000
+    }
+
+    [Fact]
+    public void EverySupportedSyntaxAndLiteral_RoundTripsAsSameDocument()
     {
         const string yaml = """
             # A comment on its own line.
@@ -60,7 +128,8 @@ public sealed class YamlAllSupportedFeaturesTest
               negative_infinity: -.inf
               negative_infinity_title: -.Inf
               negative_infinity_upper: -.INF
-              # Left out: DeepEquals compares floats with ==, so a NaN is never equal to itself.
+              # Left out: DeepEquals compares floats with ==, so a NaN is never equal to itself. This aggregate
+              # round trip therefore cannot check NaN; the dedicated special-float tests cover its parsing and writing.
               # not_a_number: .nan
               # not_a_number_title: .NaN
               # not_a_number_upper: .NAN
@@ -81,8 +150,11 @@ public sealed class YamlAllSupportedFeaturesTest
               plain_time: 12:30:45
               plain_separator_edges: [1_, _1, 1__0, 0x]
               yaml_1_1_words: ["y", "n", "yes", "no", "on", "off"]
+              # A more-indented plain-scalar continuation is valid and folds to a space.
+              # https://yaml.org/spec/1.2.2/#733-plain-style
               plain_multiline: first line
                 second line
+                  third line
 
                 after a blank line
               single: 'it''s'
@@ -136,6 +208,11 @@ public sealed class YamlAllSupportedFeaturesTest
               - {flow: map}
               - 1
               - null
+              # A bare "-" may put its mapping on the next, more indented line.
+              # https://yaml.org/spec/1.2.2/#821-block-sequences
+              -
+                key: in a sequence
+                other: value
             sequence_at_the_indent_of_its_key:
             - a
             - b
@@ -212,9 +289,8 @@ public sealed class YamlAllSupportedFeaturesTest
             $"The document read back is not equal. YAML:\n{text}"
         );
 
-        // The values of the document that was read back, by index. The value that is read comes first and the expected
-        // value second, so that each line reads like the path in the YAML: this is for readability, and xUnit2000 (which
-        // asks for the constant as the first argument) is disabled for it.
+        // xUnit2000 asks for the constant as the first argument.
+        // Suppress it for readability.
 #pragma warning disable xUnit2000
         var root = restored.RootElement.AsValue();
 
@@ -319,7 +395,7 @@ public sealed class YamlAllSupportedFeaturesTest
         Assert.Equal(root["strings"]["yaml_1_1_words"][5].AsString(), "off");
         Assert.Equal(
             root["strings"]["plain_multiline"].AsString(),
-            "first line second line\nafter a blank line"
+            "first line second line third line\nafter a blank line"
         );
 
         Assert.Equal(root["strings"]["single"].AsString(), "it's");
@@ -376,6 +452,8 @@ public sealed class YamlAllSupportedFeaturesTest
         Assert.Equal(root["sequences"][0].AsString(), "plain");
         Assert.Equal(root["sequences"][1][0].AsString(), "nested");
         Assert.Equal(root["sequences"][1][1].AsString(), "sequence");
+        // A mapping below a bare dash must have the same value as a mapping on the dash's line.
+        Assert.True(DValue.DeepEquals(root["sequences"][2], root["sequences"][7]));
         Assert.Equal(root["sequences"][2]["key"].AsString(), "in a sequence");
         Assert.Equal(root["sequences"][2]["other"].AsString(), "value");
         Assert.Equal(root["sequences"][3][0].AsString(), "flow");

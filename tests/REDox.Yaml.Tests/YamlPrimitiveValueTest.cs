@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using REDox.Json;
 
@@ -9,7 +9,7 @@ public sealed partial class YamlPrimitiveValueTest
     [Theory]
     [InlineData("null")]
     [InlineData("~")]
-    public void ParseNull(string yaml)
+    public void NullLiteral_ParsesAsNull(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -25,7 +25,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("n", false)]
     [InlineData("no", false)]
     [InlineData("off", false)]
-    public void ParseBoolean(string yaml, bool expected)
+    public void BooleanLiteral_ParsesExpectedValue(string yaml, bool expected)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -35,7 +35,7 @@ public sealed partial class YamlPrimitiveValueTest
     [Theory]
     [InlineData("42", 42L)]
     [InlineData("-12", -12L)]
-    public void ParseInteger(string yaml, long expected)
+    public void IntegerLiteral_ParsesExpectedValue(string yaml, long expected)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -60,7 +60,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("9223372036854775807", long.MaxValue)]
     [InlineData("-9223372036854775808", long.MinValue)]
     [InlineData("0x7FFFFFFFFFFFFFFF", long.MaxValue)]
-    public void ParseCoreSchemaInteger(string yaml, long expected)
+    public void Yaml12DecimalHexAndOctalIntegers_ParseExpectedValue(string yaml, long expected)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -72,21 +72,20 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("18446744073709551615", ulong.MaxValue)]
     [InlineData("9223372036854775808", 9223372036854775808UL)]
     [InlineData("0xFFFFFFFFFFFFFFFF", ulong.MaxValue)]
-    public void ParseIntegerAboveInt64(string yaml, ulong expected)
+    public void IntegerAboveInt64_ParsesAsUnsignedValue(string yaml, ulong expected)
     {
         using var document = YamlDocument.Parse(yaml);
 
         Assert.Equal(expected, document.RootElement.GetUInt64());
     }
 
-    // Integers that no 64-bit type holds keep every digit.
     [Theory]
     [InlineData("18446744073709551616")]
     [InlineData("-9223372036854775809")]
     [InlineData("123456789012345678901234567890")]
-    public void ParseIntegerBeyondSixtyFourBits(string yaml)
+    public void IntegerBeyondSixtyFourBits_PreservesDigits(string yaml)
     {
-        YamlTestHelper.ParsesAs(yaml, yaml);
+        YamlTestHelper.AssertYamlParsesAsJsonValueAndRoundTrips(yaml, yaml);
     }
 
     // The YAML 1.1 binary integers and the underscores between digits are numbers (an underscore is for reading only).
@@ -102,14 +101,16 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("0xF_F", 255L)]
     [InlineData("0o1_4", 12L)]
     [InlineData("9_223_372_036_854_775_807", long.MaxValue)]
-    public void YamlOneDotOneIntegerFormsAreNumbers(string yaml, long expected)
+    public void BinaryAndDigitSeparatedYaml11Integers_ParseAsNumbersAndWriteWithoutSeparators(
+        string yaml,
+        long expected
+    )
     {
         using var document = YamlDocument.Parse(yaml);
 
         Assert.Equal(DTokenKind.Integer, document.RootElement.Token.Kind);
         Assert.Equal(expected, document.RootElement.GetInt64());
 
-        // The value does not have the underscores, so it is written without them.
         Assert.Equal(
             expected.ToString(CultureInfo.InvariantCulture) + "\n",
             YamlDocument.EncodeToString(
@@ -125,7 +126,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("-1_0.5", -10.5)]
     [InlineData("1_0e3", 10000.0)]
     [InlineData("1_0.5E-1", 1.05)]
-    public void UnderscoresBetweenDigitsOfAFloatAreRead(string yaml, double expected)
+    public void FloatWithDigitSeparators_ParsesExpectedValue(string yaml, double expected)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -134,7 +135,7 @@ public sealed partial class YamlPrimitiveValueTest
     }
 
     [Fact]
-    public void BigIntegerWithUnderscoresIsReadWithoutThem()
+    public void BigIntegerWithDigitSeparators_ParsesWithoutSeparators()
     {
         using var document = YamlDocument.Parse("1_000_000_000_000_000_000_000");
 
@@ -143,7 +144,7 @@ public sealed partial class YamlPrimitiveValueTest
     }
 
     [Fact]
-    public void UnsignedIntegerWithUnderscoresIsRead()
+    public void UnsignedIntegerWithDigitSeparators_ParsesExpectedValue()
     {
         using var document = YamlDocument.Parse("18_446_744_073_709_551_615");
 
@@ -169,7 +170,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("0b1_2")]
     [InlineData("0xG_1")]
     [InlineData("-_1")]
-    public void UnderscoreAnywhereElseMakesAString(string yaml)
+    public void InvalidNumericSeparatorOrDigit_ParsesAsString(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -190,7 +191,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("0B101")]
     [InlineData("0xFFFFFFFFFFFFFFFFF")]
     [InlineData("0b11111111111111111111111111111111111111111111111111111111111111111")]
-    public void YamlOneDotOneIntegerFormsAreStrings(string yaml)
+    public void UnsupportedYaml11IntegerForms_PreserveTextAsStrings(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -207,7 +208,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("+12")]
     [InlineData("190:20:30")]
     [InlineData("0755")]
-    public void StringsThatLookLikeNumbersAreWrittenQuoted(string value)
+    public void NumericLookingStrings_WriteQuotedAndRoundTripAsStrings(string value)
     {
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
@@ -228,7 +229,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("-.5", -0.5)]
     [InlineData("5.", 5.0)]
     [InlineData("0.0", 0.0)]
-    public void ParseFloat(string yaml, double expected)
+    public void FloatLiteral_ParsesExpectedValue(string yaml, double expected)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -240,14 +241,18 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("true")]
     [InlineData("42")]
     [InlineData("3.5")]
-    public void PrimitiveRoundTrip(string json)
+    public void PrimitiveValue_RoundTripsThroughYaml(string json)
     {
-        using var source = JsonDocument.Parse(json);
+        using var sourceJsonDocument = JsonDocument.Parse(json);
 
-        var yaml = YamlDocument.EncodeToString(source.RootElement);
-        using var parsed = YamlDocument.Parse(yaml);
+        var yamlFromJson = YamlDocument.EncodeToString(sourceJsonDocument.RootElement);
 
-        Assert.Equal(source.RootElement.ToJsonString(), parsed.RootElement.ToJsonString());
+        using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
+
+        Assert.Equal(
+            sourceJsonDocument.RootElement.ToJsonString(),
+            convertedYamlDocument.RootElement.ToJsonString()
+        );
     }
 
     [Theory]
@@ -262,7 +267,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData(".nan", double.NaN)]
     [InlineData(".NaN", double.NaN)]
     [InlineData(".NAN", double.NaN)]
-    public void ParseSpecialFloat(string yaml, double expected)
+    public void YamlSpecialFloatSpellings_ParseExpectedValue(string yaml, double expected)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -287,7 +292,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData(".infinity")]
     [InlineData("+.nan")]
     [InlineData("-.nan")]
-    public void WordsThatAreNotSpecialFloatsAreStrings(string yaml)
+    public void NonSpecialFloatWords_ParseAsStrings(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -297,7 +302,7 @@ public sealed partial class YamlPrimitiveValueTest
 
     // Negative zero is a float: written as an integer it would lose its sign.
     [Fact]
-    public void NegativeZeroFloatKeepsItsSignWhenWritten()
+    public void NegativeZeroFloat_PreservesSignWhenWritten()
     {
         var yaml = YamlDocument.EncodeToString(DValue.Create(-0.0).AsElement());
 
@@ -311,7 +316,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData(double.PositiveInfinity)]
     [InlineData(double.NegativeInfinity)]
     [InlineData(double.NaN)]
-    public void SpecialFloatsRoundTrip(double value)
+    public void SpecialFloats_RoundTrip(double value)
     {
         var yaml = YamlDocument.EncodeToString(DValue.Create(value).AsElement());
 
@@ -326,7 +331,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData(IntegerKind.Octal)]
     [InlineData(IntegerKind.Binary)]
     [InlineData(IntegerKind.Unsigned)]
-    public void IntegerOfAnyKindReadsBackAsTheSameValue(IntegerKind kind)
+    public void IntegerOfAnyKind_ReadsBackAsSameValue(IntegerKind kind)
     {
         var yaml = YamlDocument.EncodeToString(DValue.Create(255, kind).AsElement());
 
@@ -336,7 +341,7 @@ public sealed partial class YamlPrimitiveValueTest
     }
 
     [Fact]
-    public void FloatOfAnyWidthReadsBackAsTheSameValue()
+    public void FloatOfAnyWidth_ReadsBackAsSameValue()
     {
         foreach (
             var value in new[]

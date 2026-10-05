@@ -1,4 +1,4 @@
-﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -21,25 +21,23 @@ internal readonly struct YamlMapKeyContentComparer : IEqualityComparer<DElement>
     public bool Equals(DElement left, DElement right)
     {
         var valueKind = GetScalarValueKind(left.Token);
-        if (valueKind != GetScalarValueKind(right.Token))
-        {
-            return false;
-        }
 
-        return valueKind switch
-        {
-            DTokenKind.Null => true,
-            DTokenKind.Boolean => left.GetBoolean() == right.GetBoolean(),
-            DTokenKind.Integer => ReadIntegerValue(left) == ReadIntegerValue(right),
-            DTokenKind.Float => left.GetDouble().Equals(right.GetDouble()),
-            DTokenKind.Timestamp => left.GetDateTimeOffset().Equals(right.GetDateTimeOffset()),
-            DTokenKind.String => new DataReader(left)
-                .ReadUtf8String(left.Id)
-                .SequenceEqual(new DataReader(right).ReadUtf8String(right.Id)),
-            _ => throw new NotSupportedException(
-                "YAML key comparison requires a supported scalar value."
-            ),
-        };
+        return valueKind == GetScalarValueKind(right.Token)
+            && valueKind switch
+            {
+                DTokenKind.Null => true,
+                DTokenKind.Boolean => left.GetBoolean() == right.GetBoolean(),
+                DTokenKind.Integer => ReadIntegerValue(left) == ReadIntegerValue(right),
+                DTokenKind.Float => left.GetDouble().Equals(right.GetDouble()),
+                DTokenKind.Timestamp => left.GetDateTimeOffset().Equals(right.GetDateTimeOffset()),
+                DTokenKind.String => new DataReader(left)
+                    .ReadUtf8String(left.Id)
+                    .SequenceEqual(new DataReader(right).ReadUtf8String(right.Id)),
+                _ => throw YamlDocument.GenericError(
+                    YamlDocument.ParseException.ErrorCode.UnsupportedFeature,
+                    "YAML key comparison requires a supported scalar value."
+                ),
+            };
     }
 
     public int GetHashCode(DElement element)
@@ -54,7 +52,10 @@ internal readonly struct YamlMapKeyContentComparer : IEqualityComparer<DElement>
     {
         if (token.IsContainer)
         {
-            ThrowHelper.ThrowNotSupported("YAML collection keys require structural comparison.");
+            YamlDocument.ThrowGenericError(
+                YamlDocument.ParseException.ErrorCode.UnsupportedFeature,
+                "YAML collection keys require structural comparison."
+            );
         }
 
         // Storage width does not change the YAML tag: a big integer is still an integer.

@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Linq;
 using REDox.Json;
 
@@ -15,25 +15,26 @@ public sealed partial class YamlJsonSuiteRoundTripTest
 
     [Theory]
     [MemberData(nameof(GetUnsupportedIsolatedSurrogateFiles))]
-    public void IsolatedSurrogatesFailJsonRoundTripThroughYaml(string filePath)
+    public void IsolatedSurrogates_ChangeDuringJsonRoundTripThroughYaml(string filePath)
     {
-        using var source = JsonDocument.Parse(File.ReadAllBytes(filePath));
+        using var sourceJsonDocument = JsonDocument.Parse(File.ReadAllBytes(filePath));
 
         foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
         {
-            var yaml = YamlDocument.EncodeToString(
-                source.RootElement,
+            var yamlFromJson = YamlDocument.EncodeToString(
+                sourceJsonDocument.RootElement,
                 new YamlWriteOptions { StringStyle = mode }
             );
 
-            using var parsed = YamlDocument.Parse(yaml);
+            using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
 
-            var restoredJson = JsonDocument.EncodeToString(parsed.RootElement);
-            using var restored = JsonDocument.Parse(restoredJson);
-
-            // UTF-8 output replaces isolated UTF-16 surrogates, so these cases cannot preserve JSON values.
+            // The JSON reader's isolated surrogate cannot survive YAML's UTF-8 representation. This assertion
+            // records that the value changed; it does not verify which replacement value YAML produced.
             Assert.False(
-                DValue.DeepEquals(source.RootElement.AsValue(), restored.RootElement.AsValue()),
+                DValue.DeepEquals(
+                    sourceJsonDocument.RootElement.AsValue(),
+                    convertedYamlDocument.RootElement.AsValue()
+                ),
                 $"YAML unexpectedly preserved {Path.GetFileName(filePath)} in {mode} mode."
             );
         }

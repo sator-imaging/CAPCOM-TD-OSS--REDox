@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Linq;
 using REDox.Json;
 using JsonSerializer = System.Text.Json.JsonSerializer;
@@ -9,11 +9,12 @@ public sealed class YamlMapTest
 {
     [Theory]
     [InlineData("{}")]
-    public void ParseEmptyMap(string yaml)
+    public void EmptyMap_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(0, document.RootElement.GetPropertyCount());
@@ -25,11 +26,12 @@ public sealed class YamlMapTest
     [Theory]
     [InlineData("{a: 1, b: true}")]
     [InlineData("a: 1\nb: true\n")]
-    public void ParseSimpleMap(string yaml)
+    public void SimpleMap_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(2, document.RootElement.GetPropertyCount());
@@ -40,7 +42,6 @@ public sealed class YamlMapTest
         );
     }
 
-    // The block and flow shapes of a map, each checked against the value it must stand for.
     [Theory]
     [InlineData("a:\n", "{\"a\":null}")]
     [InlineData("a:\nb: 1\n", "{\"a\":null,\"b\":1}")]
@@ -55,18 +56,22 @@ public sealed class YamlMapTest
     [InlineData("{\n  a: 1,\n  b: [2,\n    3],\n}\n", "{\"a\":1,\"b\":[2,3]}")]
     [InlineData("a: {\n  b: 1,\n  c: 2\n }\n", "{\"a\":{\"b\":1,\"c\":2}}")]
     [InlineData("a:\n  - b: 1\n    c: 2\n  - d: 3\n", "{\"a\":[{\"b\":1,\"c\":2},{\"d\":3}]}")]
-    public void MapShapes(string yaml, string expectedJson)
+    public void BlockAndFlowMapShapes_ParseExpectedValuesAndRoundTrip(
+        string yaml,
+        string expectedJson
+    )
     {
-        YamlTestHelper.ParsesAs(yaml, expectedJson);
+        YamlTestHelper.AssertYamlParsesAsJsonValueAndRoundTrips(yaml, expectedJson);
     }
 
     [Theory]
     [InlineData("a:\n  b: 1\n")]
-    public void ParseNestedMap(string yaml)
+    public void NestedMap_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(1, document.RootElement.GetPropertyCount());
@@ -79,11 +84,12 @@ public sealed class YamlMapTest
 
     [Theory]
     [InlineData("a:\n  - 1\n  - 2\n")]
-    public void ParseMapWithArray(string yaml)
+    public void MapWithArray_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(1, document.RootElement.GetPropertyCount());
@@ -123,7 +129,7 @@ public sealed class YamlMapTest
     [InlineData("{1: a}", DTokenKind.Integer)]
     [InlineData("{true: a}", DTokenKind.Boolean)]
     [InlineData("[1: a]", DTokenKind.Integer)]
-    public void KeyIsResolvedLikeAValue(string yaml, DTokenKind kind)
+    public void ScalarMapKey_ResolvesLikeValue(string yaml, DTokenKind kind)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -138,13 +144,15 @@ public sealed class YamlMapTest
     }
 
     [Fact]
-    public void KeysOfDifferentTypesShareOneMap()
+    public void DifferentKeyTypes_CoexistInOneMap()
     {
         using var document = YamlDocument.Parse(
             "1: a\ntrue: b\nnull: c\n1.5: d\n2001-12-14: e\n\"2\": f\ng: h\n"
         );
 
-        var kinds = document.RootElement.AsMap().Select(pair => pair.Key.AsElement().Token.Kind);
+        var kinds = document
+            .RootElement.AsMap()
+            .Select(static pair => pair.Key.AsElement().Token.Kind);
 
         Assert.Equal(
             new[]
@@ -166,7 +174,7 @@ public sealed class YamlMapTest
     [InlineData("\"1\": a\n\"true\": b\n\"2001-12-14\": c\n\"1.5\": d\n")]
     [InlineData("1: a\n\"1\": b\n")]
     [InlineData("null: a\ntext: b\n")]
-    public void KeyTypesSurviveWritingAndReading(string yaml)
+    public void MapKeyTypes_SurviveWritingAndReading(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -179,7 +187,7 @@ public sealed class YamlMapTest
     }
 
     [Fact]
-    public void MapWithKeysOfOtherTypesIsWrittenAndReadBack()
+    public void MapWithNonStringKeys_WritesAndReadsBack()
     {
         var map = new DMap
         {
@@ -203,12 +211,12 @@ public sealed class YamlMapTest
 
         Assert.Equal(
             new[] { DTokenKind.Integer, DTokenKind.Boolean, DTokenKind.String, DTokenKind.Float },
-            parsed.RootElement.AsMap().Select(pair => pair.Key.AsElement().Token.Kind)
+            parsed.RootElement.AsMap().Select(static pair => pair.Key.AsElement().Token.Kind)
         );
     }
 
     [Fact]
-    public void ValidationComparesKeysWithTheirTypes()
+    public void KeyValidation_DistinguishesKeyTypes()
     {
         var validating = new YamlDocumentOptions { EnableValueValidation = true };
 
@@ -216,21 +224,24 @@ public sealed class YamlMapTest
 
         Assert.Equal(2, different.RootElement.AsMap().Count);
 
-        Assert.ThrowsAny<DocumentParseException>(() =>
-            YamlDocument.Parse("1: a\n1: b\n", options: validating)
+        YamlTestHelper.AssertYamlParseError(
+            () => YamlDocument.Parse("1: a\n1: b\n", options: validating),
+            "DuplicateKey"
         );
     }
 
     [Theory]
     [InlineData("11: a\n0xB: b\n")]
     [InlineData("{11: a, 0xB: b}")]
-    public void ValidationRejectsEquivalentIntegerKeySpellings(string yaml)
+    public void EquivalentIntegerKeySpellings_ValidationRejectsDuplicates(string yaml)
     {
-        Assert.ThrowsAny<DocumentParseException>(() =>
-            YamlDocument.Parse(
-                yaml,
-                options: new YamlDocumentOptions { EnableValueValidation = true }
-            )
+        YamlTestHelper.AssertYamlParseError(
+            () =>
+                YamlDocument.Parse(
+                    yaml,
+                    options: new YamlDocumentOptions { EnableValueValidation = true }
+                ),
+            "DuplicateKey"
         );
     }
 
@@ -253,19 +264,19 @@ public sealed class YamlMapTest
     [InlineData("[\n? foo\n bar : baz\n]", "[{\"foo bar\":\"baz\"}]")]
     [InlineData("{? a : b, ? c}", "{\"a\":\"b\",\"c\":null}")]
     [InlineData("?\n: b\n", "{\"null\":\"b\"}")]
-    public void ExplicitKeyReadsLikeAnImplicitOne(string yaml, string expectedJson)
+    public void ExplicitKey_ReadsLikeImplicitKey(string yaml, string expectedJson)
     {
-        using var document = YamlDocument.Parse(yaml);
-        using var expected = JsonDocument.Parse(expectedJson);
+        using var parsedYamlDocument = YamlDocument.Parse(yaml);
+        using var expectedJsonDocument = JsonDocument.Parse(expectedJson);
 
         // JSON keys are strings, so the keys of the YAML map are compared as the text they are written with.
         Assert.Equal(
-            JsonDocument.EncodeToString(expected.RootElement),
-            JsonWithKeysAsText(document.RootElement)
+            JsonDocument.EncodeToString(expectedJsonDocument.RootElement),
+            EncodeAsJsonWithTextKeys(parsedYamlDocument.RootElement)
         );
     }
 
-    private static string JsonWithKeysAsText(DElement element)
+    private static string EncodeAsJsonWithTextKeys(DElement element)
     {
         return element.Token.Type switch
         {
@@ -275,23 +286,23 @@ public sealed class YamlMapTest
                     element
                         .AsMap()
                         .Select(pair =>
-                            JsonSerializer.Serialize(KeyText(pair.Key.AsElement()))
+                            JsonSerializer.Serialize(GetKeyText(pair.Key.AsElement()))
                             + ":"
-                            + JsonWithKeysAsText(pair.Value.AsElement())
+                            + EncodeAsJsonWithTextKeys(pair.Value.AsElement())
                         )
                 )
                 + "}",
             DTokenType.Array => "["
                 + string.Join(
                     ",",
-                    element.AsArray().Select(item => JsonWithKeysAsText(item.AsElement()))
+                    element.AsArray().Select(item => EncodeAsJsonWithTextKeys(item.AsElement()))
                 )
                 + "]",
             _ => JsonDocument.EncodeToString(element),
         };
     }
 
-    private static string KeyText(DElement key)
+    private static string GetKeyText(DElement key)
     {
         if (key.Token.Kind == DTokenKind.Null)
         {
@@ -312,11 +323,12 @@ public sealed class YamlMapTest
 
     [Theory]
     [InlineData("a:\n- 1\n- 2\nb: 3\n")]
-    public void ParseMapWithIndentlessArray(string yaml)
+    public void MapWithIndentlessArray_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
         var encoded = YamlDocument.EncodeToString(document.RootElement);
+
         using var parsed = YamlDocument.Parse(encoded);
 
         Assert.Equal(2, document.RootElement.GetPropertyCount());

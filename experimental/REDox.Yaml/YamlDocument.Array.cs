@@ -1,4 +1,4 @@
-﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
+// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
@@ -81,7 +81,7 @@ public sealed partial class YamlDocument
 
     private uint ParseBlockArray(int depth)
     {
-        var baseIndent = _position - LastLineStart(_position);
+        var baseIndent = _position - FindCurrentLineStart(_position);
         var arrayId = AllocToken(DToken.MakeArray(0));
         while (_position < Source.Length && IsBlockSequenceIndicator(_position))
         {
@@ -102,8 +102,9 @@ public sealed partial class YamlDocument
             {
                 SkipLineRemainder();
 
-                var next = PeekNextContent();
-                if (next.Indent > baseIndent)
+                var (Position, Indent) = PeekNextContent();
+
+                if (Indent > baseIndent)
                 {
                     SkipTrivia();
                     ParseNode(depth + 1, parentIndent: baseIndent);
@@ -121,11 +122,11 @@ public sealed partial class YamlDocument
                     ThrowParseError(ParseException.ErrorCode.InvalidFormat);
                 }
 
-                var lineStart = LastLineStart(_position);
+                var lineStart = FindCurrentLineStart(_position);
 
                 ParseNode(depth + 1, parentIndent: baseIndent);
 
-                if (LastLineStart(_position) == lineStart)
+                if (FindCurrentLineStart(_position) == lineStart)
                 {
                     ExpectLineEnd();
                 }
@@ -170,7 +171,7 @@ public sealed partial class YamlDocument
         var count = reader.GetValueCount(arrayId);
         if (count == 0)
         {
-            writer.WriteString(YamlSyntax.EmptySequenceUtf8);
+            WriteEmptyCollection(writer, isMap: false, afterIndicator: false);
 
             return false;
         }
@@ -205,20 +206,14 @@ public sealed partial class YamlDocument
                 skipInlineComment: separatorWritten
             );
 
-            writer.WriteUtf8Byte(YamlSyntax.Dash);
+            WriteCollectionIndicator(writer, mapValue: false);
 
             var value = reader.GetToken(valueId);
 
-            writer.PushIndent();
-
-            if (value.IsContainer && reader.GetValueCount(valueId) > 0)
-            {
-                writer.WriteIndentNewLine();
-            }
-            else
-            {
-                writer.WriteUtf8Byte(YamlSyntax.Space);
-            }
+            WriteValueSeparator(
+                writer,
+                blockValue: value.IsContainer && reader.GetValueCount(valueId) > 0
+            );
 
             endsWithBlockScalar = WriteNode(
                 writer,
