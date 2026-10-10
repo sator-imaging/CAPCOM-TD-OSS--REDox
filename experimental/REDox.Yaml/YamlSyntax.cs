@@ -189,10 +189,6 @@ internal static partial class YamlSyntax
         value is Space or Tab or CarriageReturn or LineFeed;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsWhiteSpaceOrLineEnd(char value) =>
-        value <= byte.MaxValue && IsWhiteSpaceOrLineEnd((byte)value);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsFlowIndicator(byte value)
     {
         return value

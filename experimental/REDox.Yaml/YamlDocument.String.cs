@@ -17,17 +17,19 @@ public sealed partial class YamlDocument
 
     private ParsedScalar ParseDoubleQuotedString(int parentIndent)
     {
+        // Escape handling advances the cursor but does not replace the input buffer.
+        var source = Source;
         _position++;
 
-        var scalar = BeginScalar(quoted: true);
+        var scalar = RecordScalarTextStart(quoted: true);
 
         // Whitespace produced by escapes must survive the trimming done at line breaks.
         // it is kept from this length.
         var protectedLength = 0;
 
-        while (_position < Source.Length)
+        while (_position < source.Length)
         {
-            var current = Source[_position++];
+            var current = source[_position++];
             if (current == YamlSyntax.DoubleQuote)
             {
                 return scalar;
@@ -54,12 +56,12 @@ public sealed partial class YamlDocument
                 continue;
             }
 
-            if (_position >= Source.Length)
+            if (_position >= source.Length)
             {
                 ThrowParseError(ParseException.ErrorCode.InvalidString);
             }
 
-            current = Source[_position++];
+            current = source[_position++];
 
             switch (current)
             {
@@ -130,7 +132,7 @@ public sealed partial class YamlDocument
                     break;
 
                 case YamlSyntax.CarriageReturn:
-                    if (_position < Source.Length && Source[_position] == YamlSyntax.LineFeed)
+                    if (_position < source.Length && source[_position] == YamlSyntax.LineFeed)
                     {
                         _position++;
                     }
@@ -179,9 +181,9 @@ public sealed partial class YamlDocument
                     {
                         // A high surrogate is only valid when the escape of its low surrogate follows.
                         if (
-                            _position + 2 > Source.Length
-                            || Source[_position + 1] != YamlSyntax.EscapeLetter.Hex4Digits
-                            || Source[_position] != YamlSyntax.Backslash
+                            _position + 2 > source.Length
+                            || source[_position + 1] != YamlSyntax.EscapeLetter.Hex4Digits
+                            || source[_position] != YamlSyntax.Backslash
                         )
                         {
                             ThrowParseError(ParseException.ErrorCode.InvalidString);
@@ -329,15 +331,17 @@ public sealed partial class YamlDocument
 
     private ParsedScalar ParseSingleQuotedString(int parentIndent)
     {
+        // Folded lines move the cursor while the source span stays fixed.
+        var source = Source;
         _position++;
 
-        var scalar = BeginScalar(quoted: true);
-        while (_position < Source.Length)
+        var scalar = RecordScalarTextStart(quoted: true);
+        while (_position < source.Length)
         {
-            var current = Source[_position++];
+            var current = source[_position++];
             if (current == YamlSyntax.SingleQuote)
             {
-                if (_position < Source.Length && Source[_position] == YamlSyntax.SingleQuote)
+                if (_position < source.Length && source[_position] == YamlSyntax.SingleQuote)
                 {
                     _utf8TextForTokens.Append(YamlSyntax.SingleQuote);
 
@@ -370,7 +374,7 @@ public sealed partial class YamlDocument
     }
 
     // Whether a flow indicator, or the ":" that separates a key from its value starts at the position.
-    private bool IsFlowTokenAt(int position)
+    private bool IsFlowScalarTerminatorAt(int position)
     {
         var source = Source;
         var current = source[position];
@@ -400,18 +404,21 @@ public sealed partial class YamlDocument
     }
 
     // TODO: 200+ LoC
-    private ParsedScalar ParsePlainString(bool key, bool flow, int parentIndent)
+    private ParsedScalar ParsePlainScalarText(bool key, bool flow, int parentIndent)
     {
+        // The source is immutable during scalar parsing, including folded continuations.
+        var source = Source;
+
         // A plain scalar cannot start with "- " Reaching here means a sequence entry in an invalid position.
         // In a flow collection a lone "-" (as in "[-]" or "[-, -]") is invalid as well.
         // An unfinished flow scalar may also end at '-', so check EOF before reading its next byte.
         if (
             IsBlockSequenceIndicator(_position)
             || flow
-            && Source[_position] == YamlSyntax.Dash
+            && source[_position] == YamlSyntax.Dash
             && (
-                _position + 1 == Source.Length
-                || Source[_position + 1]
+                _position + 1 == source.Length
+                || source[_position + 1]
                     is YamlSyntax.FlowSeparator
                     or YamlSyntax.FlowSequenceEnd
                     or YamlSyntax.FlowMappingEnd
@@ -423,20 +430,20 @@ public sealed partial class YamlDocument
 
         var start = _position;
         var stops = flow ? YamlSyntax.PlainFlowStops : YamlSyntax.PlainBlockStops;
-        while (_position < Source.Length)
+        while (_position < source.Length)
         {
             // Only the stop characters can end the scalar so everything in between is skipped in one step.
-            var offset = Source[_position..].IndexOfAny(stops);
+            var offset = source[_position..].IndexOfAny(stops);
             if (offset < 0)
             {
-                _position = Source.Length;
+                _position = source.Length;
 
                 break;
             }
 
             _position += offset;
 
-            var current = Source[_position];
+            var current = source[_position];
             if (YamlSyntax.IsLineEnd(current) || (flow && YamlSyntax.IsFlowIndicator(current)))
             {
                 break;
@@ -444,7 +451,7 @@ public sealed partial class YamlDocument
 
             if (
                 current == YamlSyntax.CommentIndicator
-                && (_position == start || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[_position - 1]))
+                && (_position == start || YamlSyntax.IsWhiteSpaceOrLineEnd(source[_position - 1]))
             )
             {
                 break;
@@ -456,11 +463,11 @@ public sealed partial class YamlDocument
             if (
                 current == YamlSyntax.MappingValueIndicator
                 && (
-                    _position + 1 == Source.Length
-                    || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[_position + 1])
+                    _position + 1 == source.Length
+                    || YamlSyntax.IsWhiteSpaceOrLineEnd(source[_position + 1])
                     // Outside a flow collection a flow indicator after the colon is ordinary text (":,").
                     || flow
-                    && Source[_position + 1]
+                    && source[_position + 1]
                         is YamlSyntax.FlowSeparator
                         or YamlSyntax.FlowMappingEnd
                         or YamlSyntax.FlowSequenceEnd
@@ -473,13 +480,13 @@ public sealed partial class YamlDocument
             _position++;
         }
 
-        var scalar = BeginScalar(quoted: false);
+        var scalar = RecordScalarTextStart(quoted: false);
 
-        _utf8TextForTokens.Append(Source[start.._position].Trim(YamlSyntax.WhiteSpace));
+        _utf8TextForTokens.Append(source[start.._position].Trim(YamlSyntax.WhiteSpace));
 
         // A plain scalar continues on the next lines.
         // In a block as well as in a flow collection. Only an implicit block key has to stay on one line.
-        if ((!key || flow) && _position < Source.Length && YamlSyntax.IsLineEnd(Source[_position]))
+        if ((!key || flow) && _position < source.Length && YamlSyntax.IsLineEnd(source[_position]))
         {
             ParsePlainStringContinuations(this, stops, flow, parentIndent);
 
@@ -492,7 +499,7 @@ public sealed partial class YamlDocument
             {
                 ref var _position = ref document._position;
                 var Source = document.Source;
-                var _scalars = document._utf8TextForTokens;
+                var _utf8TextForTokens = document._utf8TextForTokens;
 
                 do
                 {
@@ -500,7 +507,7 @@ public sealed partial class YamlDocument
 
                     document.ConsumeLineEnd();
 
-                    var (Position, Indent) = document.PeekNextContent();
+                    var (Position, Indent) = document.PeekNextNonTriviaContentLine();
 
                     // A comment line ends the scalar: it cannot continue after the comment.
                     if (
@@ -509,7 +516,7 @@ public sealed partial class YamlDocument
                         || Indent == 0 && document.IsDocumentMarkerAt(Position)
                         || Source[lineEnd..Position].Contains(YamlSyntax.CommentIndicator)
                         // A line that starts with ",", "}" or ": " belongs to the collection, not to the scalar.
-                        || flow && document.IsFlowTokenAt(Position)
+                        || flow && document.IsFlowScalarTerminatorAt(Position)
                     )
                     {
                         _position = lineEnd;
@@ -550,11 +557,11 @@ public sealed partial class YamlDocument
 
                     if (breaks == 1)
                     {
-                        _scalars.Append(YamlSyntax.Space);
+                        _utf8TextForTokens.Append(YamlSyntax.Space);
                     }
                     else
                     {
-                        _scalars.Append(YamlSyntax.LineFeed, breaks - 1);
+                        _utf8TextForTokens.Append(YamlSyntax.LineFeed, breaks - 1);
                     }
 
                     _position = Position;
@@ -620,7 +627,7 @@ public sealed partial class YamlDocument
                         _position++;
                     }
 
-                    _scalars.Append(
+                    _utf8TextForTokens.Append(
                         Source[continuationStart.._position].Trim(YamlSyntax.WhiteSpace)
                     );
 
@@ -641,7 +648,7 @@ public sealed partial class YamlDocument
     }
 
     // TODO: 200+ LoC
-    private ParsedScalar ParseBlockString(int parentIndent)
+    private ParsedScalar ParseLiteralOrFoldedBlockScalarText(int parentIndent)
     {
         // A block scalar scans every physical line, so reuse the source span throughout the scan.
         var source = Source;
@@ -679,7 +686,8 @@ public sealed partial class YamlDocument
                     ThrowParseError(ParseException.ErrorCode.InvalidString);
                 }
 
-                // The scalar token does not exist yet, so retain its header comment until CommitScalar can attach it.
+                // The scalar token does not exist yet,
+                // so retain its header comment until CreateTokenForParsedScalar can attach it.
                 _position--;
 
                 var commentStart = _position;
@@ -724,7 +732,7 @@ public sealed partial class YamlDocument
         var emptyLineCount = 0;
         var hasScalarContent = false;
         var previousLineWasMoreIndented = false;
-        var scalar = BeginScalar(quoted: true, trailingComment);
+        var scalar = RecordScalarTextStart(quoted: true, trailingComment);
         while (_position < source.Length)
         {
             var lineStart = _position;
@@ -865,7 +873,7 @@ public sealed partial class YamlDocument
     {
         var text = EncodeByteStringAsYamlText(reader.ReadByteString(tokenId), token.ByteStringKind);
 
-        WriteStringValue(writer, text, options, depth, key, commentWhitespace, commentText);
+        WriteYamlStringScalar(writer, text, options, depth, key, commentWhitespace, commentText);
     }
 
     internal static ReadOnlySpan<byte> EncodeByteStringAsYamlText(
@@ -880,7 +888,7 @@ public sealed partial class YamlDocument
         return Utf8Helper.EncodeByteString(bytes, encodeKind);
     }
 
-    internal static void WriteStringValue(
+    internal static void WriteYamlStringScalar(
         Utf8TextWriter writer,
         ReadOnlySpan<byte> value,
         in YamlWriteOptions options,
@@ -901,12 +909,12 @@ public sealed partial class YamlDocument
 
         if (!key && options.StringStyle == YamlStringStyle.Multiline)
         {
-            WriteBlockString(writer, value, depth, options, commentWhitespace, commentText);
+            WriteLiteralBlockScalar(writer, value, depth, options, commentWhitespace, commentText);
 
             return;
         }
 
-        if (YamlStringHelper.CanWritePlain(value, key))
+        if (YamlStringHelper.CanWriteStringAsPlainScalar(value, key))
         {
             writer.WriteString(value);
 
@@ -919,7 +927,7 @@ public sealed partial class YamlDocument
         writer.EndWriteUtf8Bytes(encoder.Encode(output, value));
     }
 
-    private static void WriteBlockString(
+    private static void WriteLiteralBlockScalar(
         Utf8TextWriter writer,
         ReadOnlySpan<byte> value,
         int depth,

@@ -136,8 +136,7 @@ public sealed class TriviaTest
     [InlineData("- 1 # one\n- 2 # two\n", "- 1 # one\n- 2 # two\n")]
     [InlineData("1:\n  2: 3 # inner\n4: 5\n", "1:\n  2: 3 # inner\n4: 5\n")]
     [InlineData("1:\n  # head\n  - 2\n", "1:\n  # head\n  - 2\n")]
-    // Core data model cannot attach a comment to the key, so the writer moves it below the key.
-    [InlineData("1: # key\n  - 2\n", "1:\n  # key\n  - 2\n")]
+    [InlineData("1:   # key\n  - 2\n", "1:   # key\n  - 2\n")]
     public void CommentPositions_WriteAsExpectedWithKeyLineCommentBelowKey(
         string yaml,
         string expected

@@ -15,7 +15,7 @@ internal static class YamlStringHelper
     /// </remarks>
     /// <param name="value">The string to write.</param>
     /// <param name="isKey">Whether the string is a map key which the parser scans more strictly than a value.</param>
-    public static bool CanWritePlain(ReadOnlySpan<byte> value, bool isKey)
+    public static bool CanWriteStringAsPlainScalar(ReadOnlySpan<byte> value, bool isKey)
     {
         if (value.Length == 0)
         {

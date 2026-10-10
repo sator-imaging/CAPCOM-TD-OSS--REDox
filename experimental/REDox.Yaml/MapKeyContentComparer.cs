@@ -96,7 +96,8 @@ internal readonly struct MapKeyContentComparer : IEqualityComparer<DElement>
                     // 6: 0, 1..4, 5
                     // 5: 0..3, 4
                     // < 5: last letter only
-                    //      Xpos, Yrot, Zscl are rare. posX, rotY, sclZ are usual. last letter matters
+                    //      Xpos, Yrot, Zscl are rare.
+                    //      posX, rotY, sclZ are usual. last letter matters
                     hash.Add(utf8[len - 1]);
                 }
 
