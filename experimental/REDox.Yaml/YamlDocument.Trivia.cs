@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using REDox.Serialization;
 
 namespace REDox.Yaml;
@@ -81,80 +79,73 @@ public sealed partial class YamlDocument
 
     private void SkipTrivia(bool leaveSameLineCommentForNextNode)
     {
-        var whitespaceBefore = false;
-        while (_position < Source.Length)
+        // Trivia scanning only advances the cursor.
+        var source = Source;
+        var preserveTrivia = _parseOptions.PreserveTrivia;
+
+        while (_position < source.Length)
         {
             var start = _position;
-            if (YamlSyntax.IsWhiteSpaceOrLineEnd(Source[_position]))
+            if (YamlSyntax.IsWhiteSpaceOrLineEnd(source[_position]))
             {
                 // Trivia often contains long whitespace runs; search the whole run without a byte loop.
-                var remaining = Source[_position..];
+                var remaining = source[_position..];
                 var nextContent = remaining.IndexOfAnyExcept(YamlSyntax.WhiteSpaceOrLineEndBytes);
                 _position += nextContent < 0 ? remaining.Length : nextContent;
 
                 if (
-                    _parseOptions.PreserveTrivia
+                    preserveTrivia
                     && !(
-                        !leaveSameLineCommentForNextNode
-                        && _position < Source.Length
-                        && Source[_position] == YamlSyntax.CommentIndicator
+                        _position < source.Length
+                        && source[_position] == YamlSyntax.CommentIndicator
                         && CanAttachTrailingComment(_position)
                     )
                 )
                 {
                     CreateTriviaTokenFromUtf8Text(
                         DTokenVariant.TriviaWhitespace,
-                        Source[start.._position]
+                        source[start.._position]
                     );
                 }
-
-                whitespaceBefore = true;
             }
-            else if (Source[_position] == YamlSyntax.CommentIndicator)
+            else if (source[_position] == YamlSyntax.CommentIndicator)
             {
                 // A comment must be separated from what precedes it: "[a, b]#x" and "\"v\"#x" are not comments.
-                if (start > 0 && !YamlSyntax.IsWhiteSpaceOrLineEnd(Source[start - 1]))
+                if (start > 0 && !YamlSyntax.IsWhiteSpaceOrLineEnd(source[start - 1]))
                 {
                     ThrowParseError(ParseException.ErrorCode.InvalidFormat);
                 }
 
                 // Without trivia preservation, a backward scan cannot affect the parsed value.
                 var attachToNode =
-                    _parseOptions.PreserveTrivia
+                    preserveTrivia
                     && !leaveSameLineCommentForNextNode
                     && CanAttachTrailingComment(start);
 
-                if (_parseOptions.PreserveTrivia && !whitespaceBefore && !attachToNode)
-                {
-                    StoreWhitespaceBeforeComment(start);
-                }
-
                 SkipToLineEnd();
 
-                if (_parseOptions.PreserveTrivia)
+                if (preserveTrivia)
                 {
                     if (attachToNode)
                     {
                         var whitespaceStart =
-                            Source[..start].LastIndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab)
+                            source[..start].LastIndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab)
                             + 1;
 
                         // Keep the comment with the value it follows so moving the next node cannot move it.
                         _trailingCommentsByNodeId.Add(
                             _lastParsedNodeId,
-                            StoreTrailingComment(Source[whitespaceStart.._position])
+                            StoreTrailingComment(source[whitespaceStart.._position])
                         );
                     }
                     else
                     {
                         CreateTriviaTokenFromUtf8Text(
                             DTokenVariant.TriviaLineComment,
-                            Source[start.._position]
+                            source[start.._position]
                         );
                     }
                 }
-
-                whitespaceBefore = false;
             }
             else
             {
@@ -198,7 +189,7 @@ public sealed partial class YamlDocument
         return Source[FindCurrentLineStart(position)..position].Contains(YamlSyntax.Tab);
     }
 
-    private void CheckFlowIndent(int parentIndent)
+    private void ValidateFlowContinuationIndent(int parentIndent)
     {
         var source = Source;
         if (_position >= source.Length)
@@ -222,7 +213,7 @@ public sealed partial class YamlDocument
         }
     }
 
-    private void SkipLineRemainder()
+    private void SkipRestOfLineAndLineBreak(uint? commentOwnerId)
     {
         if (
             _parseOptions.PreserveTrivia
@@ -232,12 +223,25 @@ public sealed partial class YamlDocument
         {
             var start = _position;
 
-            StoreWhitespaceBeforeComment(start);
             SkipToLineEnd();
-            CreateTriviaTokenFromUtf8Text(
-                DTokenVariant.TriviaLineComment,
-                Source[start.._position]
-            );
+
+            if (commentOwnerId is { } ownerId)
+            {
+                var whitespaceStart =
+                    Source[..start].LastIndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab) + 1;
+
+                _trailingCommentsByNodeId.Add(
+                    ownerId,
+                    StoreTrailingComment(Source[whitespaceStart.._position])
+                );
+            }
+            else
+            {
+                CreateTriviaTokenFromUtf8Text(
+                    DTokenVariant.TriviaLineComment,
+                    Source[start.._position]
+                );
+            }
         }
         else
         {
@@ -247,49 +251,21 @@ public sealed partial class YamlDocument
         ConsumeLineEnd();
     }
 
-    // NOTE / TODO:
-    //   Core (DOM/IR) only has leading trivia: every comment is attached to the token that FOLLOWS it,
-    //   and nothing can say "this comment ended the previous value's line".
-    //   Like JSON5, we encode that in the trivia sequence itself instead of changing Core for now.
-    //   A comment that shares a line with the preceding value is stored as the following shape.
-    //     --> [whitespace-without-line-break][line-comment]
-    //   A comment on its own line is preceded by whitespace that contains the line break (or by nothing),
-    //   so the two cases stay distinguishable.
-    //   Scalar parsing trims the spaces in front of "#", so they have to be restored here.
-    private void StoreWhitespaceBeforeComment(int commentStart)
+    private (int Position, int Indent) PeekNextNonTriviaContentLine()
     {
-        var spaceStart =
-            Source[..commentStart].LastIndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab) + 1;
-
-        // No spaces, start of the text, or the comment begins its own line: nothing to restore.
-        if (
-            spaceStart == commentStart
-            || spaceStart == 0
-            || YamlSyntax.IsLineEnd(Source[spaceStart - 1])
-        )
-        {
-            return;
-        }
-
-        CreateTriviaTokenFromUtf8Text(
-            DTokenVariant.TriviaWhitespace,
-            Source[spaceStart..commentStart]
-        );
-    }
-
-    private (int Position, int Indent) PeekNextContent()
-    {
+        // Looking ahead calls indentation helpers but never changes the input buffer.
+        var source = Source;
         var position = _position;
 
         // Every caller has consumed the preceding line break, so this position is already a line start.
         // Searching backward for it on each nested value would repeat work on the previous line.
         var lineStart = position;
-        while (position < Source.Length)
+        while (position < source.Length)
         {
             var indent = CountIndent(lineStart);
             position = Math.Max(position, lineStart + indent);
 
-            if (position >= Source.Length)
+            if (position >= source.Length)
             {
                 return (position, -1);
             }
@@ -297,35 +273,35 @@ public sealed partial class YamlDocument
             // CountIndent already reached the content on space-indented lines. Only tabs or spaces after
             // the current position need another scan; a tab-only line is still blank, not scalar content.
             var contentStart = position;
-            if (Source[position] is YamlSyntax.Space or YamlSyntax.Tab)
+            if (source[position] is YamlSyntax.Space or YamlSyntax.Tab)
             {
-                var remaining = Source[position..];
+                var remaining = source[position..];
                 var firstNonSpace = remaining.IndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab);
-                contentStart = firstNonSpace < 0 ? Source.Length : position + firstNonSpace;
+                contentStart = firstNonSpace < 0 ? source.Length : position + firstNonSpace;
             }
 
-            if (contentStart >= Source.Length)
+            if (contentStart >= source.Length)
             {
                 return (contentStart, -1);
             }
 
             if (
-                Source[contentStart] == YamlSyntax.CommentIndicator
-                || YamlSyntax.IsLineEnd(Source[contentStart])
+                source[contentStart] == YamlSyntax.CommentIndicator
+                || YamlSyntax.IsLineEnd(source[contentStart])
             )
             {
                 position = contentStart;
 
-                var lineEnd = Source[position..]
+                var lineEnd = source[position..]
                     .IndexOfAny(YamlSyntax.CarriageReturn, YamlSyntax.LineFeed);
 
-                position = lineEnd < 0 ? Source.Length : position + lineEnd;
+                position = lineEnd < 0 ? source.Length : position + lineEnd;
 
                 if (
-                    position < Source.Length
-                    && Source[position++] == YamlSyntax.CarriageReturn
-                    && position < Source.Length
-                    && Source[position] == YamlSyntax.LineFeed
+                    position < source.Length
+                    && source[position++] == YamlSyntax.CarriageReturn
+                    && position < source.Length
+                    && source[position] == YamlSyntax.LineFeed
                 )
                 {
                     position++;
@@ -363,113 +339,7 @@ public sealed partial class YamlDocument
         _position = position;
     }
 
-    // Detects the '[whitespace-without-line-break][line-comment]' pair that starts a trivia sequence.
-    //   --> see StoreWhitespaceBeforeComment
-    // A comment that was on the same line as the previous value.
-    private static bool IsTrailingCommentPair(
-        in DataReader reader,
-        ReadOnlySpan<uint> triviaIds,
-        out uint whitespaceId,
-        out uint commentId
-    )
-    {
-        whitespaceId = 0;
-        commentId = 0;
-
-        if (
-            triviaIds.Length < 2
-            || reader.GetToken(triviaIds[0]).Variant != DTokenVariant.TriviaWhitespace
-            || reader.GetToken(triviaIds[1]).Variant != DTokenVariant.TriviaLineComment
-        )
-        {
-            return false;
-        }
-
-        var whitespace = reader.ReadTrivia(triviaIds[0]);
-        if (whitespace.IndexOfAny(YamlSyntax.LineFeed, YamlSyntax.CarriageReturn) >= 0)
-        {
-            return false;
-        }
-
-        whitespaceId = triviaIds[0];
-        commentId = triviaIds[1];
-
-        return true;
-    }
-
-    private static bool TryGetTrailingComment(
-        in DataReader reader,
-        uint tokenId,
-        out uint whitespaceId,
-        out uint commentId
-    )
-    {
-        Span<uint> triviaIds = stackalloc uint[2];
-        var count = 0;
-        foreach (var triviaId in reader.EnumerateTrivia(tokenId))
-        {
-            triviaIds[count++] = triviaId;
-
-            if (count == triviaIds.Length)
-            {
-                break;
-            }
-        }
-
-        return IsTrailingCommentPair(reader, triviaIds[..count], out whitespaceId, out commentId);
-    }
-
-    private static bool TryGetTrailingComment(
-        in DataReader reader,
-        List<uint> triviaIds,
-        out uint whitespaceId,
-        out uint commentId
-    )
-    {
-        return IsTrailingCommentPair(
-            reader,
-            CollectionsMarshal.AsSpan(triviaIds),
-            out whitespaceId,
-            out commentId
-        );
-    }
-
-    // Writes the comment that ended the previous value's line.
-    // The writer calls this before it starts a new line because Core stores that comment as
-    // 'leading trivia' of the NEXT token.
-    private static void WriteTrailingComment(
-        Utf8TextWriter writer,
-        in DataReader reader,
-        uint nextTokenId,
-        in YamlWriteOptions options
-    )
-    {
-        if (
-            !options.PreserveTrivia
-            || !TryGetTrailingComment(reader, nextTokenId, out var whitespaceId, out var commentId)
-        )
-        {
-            return;
-        }
-
-        WriteTrailingCommentText(writer, reader, whitespaceId, commentId);
-    }
-
-    // The white space in front of the comment is written as it was read.
-    //   ("some       # note" keeps its spaces and a tab stays a tab)
-    // It is never replaced by a single space.
-    private static void WriteTrailingCommentText(
-        Utf8TextWriter writer,
-        in DataReader reader,
-        uint whitespaceId,
-        uint commentId
-    )
-    {
-        writer.WriteString(reader.ReadTrivia(whitespaceId));
-        writer.WriteString(reader.ReadTrivia(commentId));
-    }
-
-    private static ReadOnlySpan<byte> GetAttachedTrailingComment(
+    private static ReadOnlySpan<byte> GetTrailingComment(
         in DataReader reader,
         uint tokenId,
         in YamlWriteOptions options
@@ -483,13 +353,12 @@ public sealed partial class YamlDocument
                 : default;
     }
 
-    private static void WriteTrivia(
+    private static void WriteLeadingTriviaForToken(
         Utf8TextWriter writer,
         in DataReader reader,
         uint tokenId,
         in YamlWriteOptions options,
-        bool separatorWritten,
-        bool skipTrailingComment = false
+        bool separatorWritten
     )
     {
         if (!options.PreserveTrivia)
@@ -497,20 +366,8 @@ public sealed partial class YamlDocument
             return;
         }
 
-        // skipTrailingComment
-        // the leading pair was already written by WriteTrailingComment and must not be written again.
-        var skip =
-            skipTrailingComment && TryGetTrailingComment(reader, tokenId, out _, out _) ? 2 : 0;
-
         foreach (var triviaId in reader.EnumerateTrivia(tokenId))
         {
-            if (skip > 0)
-            {
-                skip--;
-
-                continue;
-            }
-
             var trivia = reader.GetToken(triviaId);
             if (trivia.Variant == DTokenVariant.TriviaWhitespace)
             {
@@ -556,73 +413,6 @@ public sealed partial class YamlDocument
                 writer.WriteIndentNewLine();
 
                 separatorWritten = true;
-            }
-        }
-    }
-
-    private static void WriteTrailingTrivia(
-        Utf8TextWriter writer,
-        in DataReader reader,
-        List<uint> triviaIds,
-        bool skipTrailingComment
-    )
-    {
-        var separatorWritten = true;
-        var skip = skipTrailingComment ? 2 : 0;
-        foreach (var triviaId in triviaIds)
-        {
-            if (skip > 0)
-            {
-                skip--;
-
-                continue;
-            }
-
-            var token = reader.GetToken(triviaId);
-            if (token.Variant == DTokenVariant.TriviaLineComment)
-            {
-                writer.WriteString(reader.ReadTrivia(triviaId));
-                writer.WriteNewLine();
-
-                separatorWritten = true;
-            }
-            else if (token.Variant == DTokenVariant.TriviaWhitespace)
-            {
-                var whitespace = reader.ReadTrivia(triviaId);
-                var index = 0;
-                while (index < whitespace.Length)
-                {
-                    // CR-only breaks need the same output as LF, while CRLF remains one break.
-                    var nextBreak = whitespace[index..]
-                        .IndexOfAny(YamlSyntax.CarriageReturn, YamlSyntax.LineFeed);
-
-                    if (nextBreak < 0)
-                    {
-                        break;
-                    }
-
-                    index += nextBreak;
-
-                    if (
-                        whitespace[index] == YamlSyntax.CarriageReturn
-                        && index + 1 < whitespace.Length
-                        && whitespace[index + 1] == YamlSyntax.LineFeed
-                    )
-                    {
-                        index++;
-                    }
-
-                    if (separatorWritten)
-                    {
-                        separatorWritten = false;
-                    }
-                    else
-                    {
-                        writer.WriteNewLine();
-                    }
-
-                    index++;
-                }
             }
         }
     }

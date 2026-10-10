@@ -14,15 +14,15 @@ public sealed class YamlWriter : DataWriter, IDisposable
     private struct Frame
     {
         public bool IsMap;
-        public bool ValueNext;
-        public bool AfterIndicator;
+        public bool AwaitingMapValue;
+        public bool FollowsParentCollectionIndicator;
         public int Depth;
         public int Count;
     }
 
     private readonly Utf8TextWriter _writer;
     private Frame[] _frames = [];
-    private int _top;
+    private int _openFrameCount;
     private bool _rootWritten;
     private bool _completed;
     private YamlWriteOptions _options;
@@ -55,7 +55,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
         _writer.Reset(settings, options.TextWriteOptions with { WriteIndented = true });
 
         _options = options;
-        _top = 0;
+        _openFrameCount = 0;
         _rootWritten = false;
         _completed = false;
     }
@@ -75,7 +75,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     {
         if (!_completed)
         {
-            if (_top != 0 || !_rootWritten)
+            if (_openFrameCount != 0 || !_rootWritten)
             {
                 YamlDocument.ThrowGenericError(
                     YamlDocument.ParseException.ErrorCode.InvalidOperation,
@@ -99,15 +99,28 @@ public sealed class YamlWriter : DataWriter, IDisposable
         }
         else
         {
-            Array.Resize(ref _frames, _top * 2);
+            Array.Resize(ref _frames, _openFrameCount * 2);
         }
 
         return _frames;
     }
 
+    private void BeginRoot()
+    {
+        if (_rootWritten)
+        {
+            YamlDocument.ThrowGenericError(
+                YamlDocument.ParseException.ErrorCode.InvalidOperation,
+                "A YAML document has one root value."
+            );
+        }
+
+        _rootWritten = true;
+    }
+
     private void BeginEntry(ref Frame frame)
     {
-        if (frame.Count > 0 || frame.AfterIndicator)
+        if (frame.Count > 0 || frame.FollowsParentCollectionIndicator)
         {
             YamlDocument.WriteValueSeparator(_writer, blockValue: true);
         }
@@ -118,17 +131,17 @@ public sealed class YamlWriter : DataWriter, IDisposable
     /// </returns>
     private bool BeginScalar(out int depth)
     {
-        if (_top == 0)
+        if (_openFrameCount == 0)
         {
-            StartRoot();
+            BeginRoot();
 
             depth = 0;
 
             return false;
         }
 
-        ref var frame = ref _frames[_top - 1];
-        if (frame.IsMap && !frame.ValueNext)
+        ref var frame = ref _frames[_openFrameCount - 1];
+        if (frame.IsMap && !frame.AwaitingMapValue)
         {
             BeginEntry(ref frame);
 
@@ -152,17 +165,17 @@ public sealed class YamlWriter : DataWriter, IDisposable
 
     private void EndScalar(bool key)
     {
-        if (_top == 0)
+        if (_openFrameCount == 0)
         {
             return;
         }
 
-        ref var frame = ref _frames[_top - 1];
+        ref var frame = ref _frames[_openFrameCount - 1];
         if (key)
         {
             YamlDocument.WriteCollectionIndicator(_writer, mapValue: true);
 
-            frame.ValueNext = true;
+            frame.AwaitingMapValue = true;
 
             return;
         }
@@ -174,27 +187,14 @@ public sealed class YamlWriter : DataWriter, IDisposable
     {
         _writer.PopIndent();
 
-        frame.ValueNext = false;
+        frame.AwaitingMapValue = false;
         frame.Count++;
-    }
-
-    private void StartRoot()
-    {
-        if (_rootWritten)
-        {
-            YamlDocument.ThrowGenericError(
-                YamlDocument.ParseException.ErrorCode.InvalidOperation,
-                "A YAML document has one root value."
-            );
-        }
-
-        _rootWritten = true;
     }
 
     private void BeginContainer(bool isMap)
     {
         // Reject excessive nesting before writing an indicator or changing the root state.
-        if (_top >= SerializerSettings.DefaultMaxDepth)
+        if (_openFrameCount >= SerializerSettings.DefaultMaxDepth)
         {
             YamlDocument.ThrowGenericError(
                 YamlDocument.ParseException.ErrorCode.InvalidOperation,
@@ -204,14 +204,14 @@ public sealed class YamlWriter : DataWriter, IDisposable
 
         var afterIndicator = false;
         var depth = 0;
-        if (_top == 0)
+        if (_openFrameCount == 0)
         {
-            StartRoot();
+            BeginRoot();
         }
         else
         {
-            ref var parent = ref _frames[_top - 1];
-            if (parent.IsMap && !parent.ValueNext)
+            ref var parent = ref _frames[_openFrameCount - 1];
+            if (parent.IsMap && !parent.AwaitingMapValue)
             {
                 YamlDocument.ThrowGenericError(
                     YamlDocument.ParseException.ErrorCode.UnsupportedFeature,
@@ -229,22 +229,22 @@ public sealed class YamlWriter : DataWriter, IDisposable
             depth = parent.Depth + 1;
         }
 
-        if (_top == _frames.Length)
+        if (_openFrameCount == _frames.Length)
         {
             _frames = ExpandFrameCapacity();
         }
 
-        _frames[_top++] = new Frame
+        _frames[_openFrameCount++] = new Frame
         {
             IsMap = isMap,
-            AfterIndicator = afterIndicator,
+            FollowsParentCollectionIndicator = afterIndicator,
             Depth = depth,
         };
     }
 
     private void EndContainer(bool isMap)
     {
-        if (_top == 0 || _frames[_top - 1].IsMap != isMap)
+        if (_openFrameCount == 0 || _frames[_openFrameCount - 1].IsMap != isMap)
         {
             YamlDocument.ThrowGenericError(
                 YamlDocument.ParseException.ErrorCode.InvalidOperation,
@@ -252,8 +252,8 @@ public sealed class YamlWriter : DataWriter, IDisposable
             );
         }
 
-        var frame = _frames[_top - 1];
-        if (frame.ValueNext)
+        var frame = _frames[_openFrameCount - 1];
+        if (frame.AwaitingMapValue)
         {
             // An invalid end must leave the open map on the stack for the next write attempt.
             YamlDocument.ThrowGenericError(
@@ -262,17 +262,21 @@ public sealed class YamlWriter : DataWriter, IDisposable
             );
         }
 
-        _top--;
+        _openFrameCount--;
 
         // A collection with no entries is written on the line of its key or dash, as the flow form.
         if (frame.Count == 0)
         {
-            YamlDocument.WriteEmptyCollection(_writer, isMap, frame.AfterIndicator);
+            YamlDocument.WriteEmptyCollection(
+                _writer,
+                isMap,
+                frame.FollowsParentCollectionIndicator
+            );
         }
 
-        if (_top > 0)
+        if (_openFrameCount > 0)
         {
-            EndEntry(ref _frames[_top - 1]);
+            EndEntry(ref _frames[_openFrameCount - 1]);
         }
     }
 
@@ -418,7 +422,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
     {
         var key = BeginScalar(out var depth);
 
-        YamlDocument.WriteStringValue(_writer, utf8Bytes, _options, depth, key);
+        YamlDocument.WriteYamlStringScalar(_writer, utf8Bytes, _options, depth, key);
         EndScalar(key);
     }
 

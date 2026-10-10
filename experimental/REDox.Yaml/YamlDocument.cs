@@ -300,7 +300,7 @@ public sealed partial class YamlDocument : Document
             }
         );
 
-        Write(writer, new DataReader(element), options);
+        WriteDocumentRoot(writer, new DataReader(element), options);
 
         return writer.Encode();
     }
@@ -326,7 +326,7 @@ public sealed partial class YamlDocument : Document
             }
         );
 
-        Write(writer, new DataReader(element), options);
+        WriteDocumentRoot(writer, new DataReader(element), options);
     }
 
     /// <summary>
@@ -351,7 +351,7 @@ public sealed partial class YamlDocument : Document
             }
         );
 
-        Write(writer, new DataReader(element), options);
+        WriteDocumentRoot(writer, new DataReader(element), options);
     }
 
     /// <summary>
@@ -378,7 +378,7 @@ public sealed partial class YamlDocument : Document
             }
         );
 
-        Write(writer, new DataReader(element), options);
+        WriteDocumentRoot(writer, new DataReader(element), options);
 
         return writer.EncodeToString();
     }
@@ -521,7 +521,7 @@ public sealed partial class YamlDocument : Document
             //   Core data model has no "empty document" classification. A document is valid only while RootId > 0,
             //   and trivia is only ever attached to the token that follows it.
             //   The null token keeps RootId valid and gives the comments a token to attach to, so they are preserved.
-            RootId = ParseNull();
+            RootId = CreateNullToken();
 
             return;
         }
@@ -554,7 +554,7 @@ public sealed partial class YamlDocument : Document
 
         if (_position >= Source.Length)
         {
-            return ParseNull();
+            return CreateNullToken();
         }
 
         // A block collection cannot start on the same line as the key it belongs to ("a: b: c", "a: - b").
@@ -613,7 +613,7 @@ public sealed partial class YamlDocument : Document
     {
         if (_position >= Source.Length || YamlSyntax.IsLineEnd(Source[_position]))
         {
-            return ParseNull();
+            return CreateNullToken();
         }
 
         var scalarSourceStart = _position;
@@ -623,8 +623,8 @@ public sealed partial class YamlDocument : Document
             YamlSyntax.SingleQuote => ParseSingleQuotedString(parentIndent),
             YamlSyntax.LiteralBlockIndicator
                 or YamlSyntax.FoldedBlockIndicator when keyContext != ScalarKeyContext.ImplicitMapKey =>
-                ParseBlockString(parentIndent),
-            _ => ParsePlainString(
+                ParseLiteralOrFoldedBlockScalarText(parentIndent),
+            _ => ParsePlainScalarText(
                 keyContext == ScalarKeyContext.ImplicitMapKey,
                 flow,
                 parentIndent
@@ -633,14 +633,14 @@ public sealed partial class YamlDocument : Document
 
         if (_parseOptions.EnableValueValidation)
         {
-            RejectDisallowedCharactersInYamlScalarSourceText(scalarSourceStart);
+            ValidateDisallowedCharactersInYamlScalarSourceText(scalarSourceStart);
         }
 
         // A quoted scalar is always a string.
         // A plain key is resolved like a plain value (null, boolean, number, timestamp or string),
         // so "1: a" is a map entry whose key is the integer 1, unless ReadMapKeyAsString is set.
         if (
-            value.Quoted
+            value.ResolveAsString
             || keyContext != ScalarKeyContext.Value && _parseOptions.ReadMapKeyAsString
         )
         {
@@ -677,7 +677,7 @@ public sealed partial class YamlDocument : Document
                     : CreateTokenForParsedScalar(DTokenVariant.String, value);
     }
 
-    private void RejectDisallowedCharactersInYamlScalarSourceText(int scalarSourceStart)
+    private void ValidateDisallowedCharactersInYamlScalarSourceText(int scalarSourceStart)
     {
         // YAML 1.2.2 section 5.1, c-printable (production [1])
         // Raw source permits TAB, LF, CR, U+0020..U+007E, U+0085, U+00A0..U+D7FF, U+E000..U+FFFD and U+10000..U+10FFFF.
@@ -737,11 +737,11 @@ public sealed partial class YamlDocument : Document
 
     private readonly record struct ParsedScalar(
         int Start,
-        bool Quoted,
+        bool ResolveAsString,
         TrailingComment? TrailingComment = null
     );
 
-    private ParsedScalar BeginScalar(bool quoted, TrailingComment? trailingComment = null)
+    private ParsedScalar RecordScalarTextStart(bool quoted, TrailingComment? trailingComment = null)
     {
         return new(_utf8TextForTokens.Length, quoted, trailingComment);
     }
@@ -778,7 +778,7 @@ public sealed partial class YamlDocument : Document
 
     private uint CreateTriviaTokenFromUtf8Text(DTokenVariant variant, ReadOnlySpan<byte> text)
     {
-        var scalar = BeginScalar(quoted: false);
+        var scalar = RecordScalarTextStart(quoted: false);
 
         _utf8TextForTokens.Append(text);
 
@@ -820,13 +820,13 @@ public sealed partial class YamlDocument : Document
                );
     }
 
-    private static void Write(
+    private static void WriteDocumentRoot(
         Utf8TextWriter writer,
         in DataReader reader,
         in YamlWriteOptions options
     )
     {
-        WriteTrivia(writer, reader, reader.RootId, options, separatorWritten: false);
+        WriteLeadingTriviaForToken(writer, reader, reader.RootId, options, separatorWritten: false);
 
         WriteNode(
             writer,
@@ -898,7 +898,7 @@ public sealed partial class YamlDocument : Document
 
             if (!isKey && options.PreserveTrivia)
             {
-                writer.WriteString(GetAttachedTrailingComment(reader, tokenId, options));
+                writer.WriteString(GetTrailingComment(reader, tokenId, options));
             }
 
             return endsWithBlockScalar;
@@ -917,7 +917,7 @@ public sealed partial class YamlDocument : Document
 
             if (!isKey && options.PreserveTrivia)
             {
-                writer.WriteString(GetAttachedTrailingComment(reader, tokenId, options));
+                writer.WriteString(GetTrailingComment(reader, tokenId, options));
             }
 
             return endsWithBlockScalar;
@@ -931,7 +931,7 @@ public sealed partial class YamlDocument : Document
         // Most writes omit trivia.
         var trailingComment =
             !isKey && options.PreserveTrivia
-                ? GetAttachedTrailingComment(reader, tokenId, options)
+                ? GetTrailingComment(reader, tokenId, options)
                 : default;
 
         switch (token.Kind)
@@ -969,7 +969,7 @@ public sealed partial class YamlDocument : Document
                     ? sourceYamlDocument!.GetUtf8TextForToken(token)
                     : reader.ReadUtf8String(tokenId);
 
-                WriteStringValue(
+                WriteYamlStringScalar(
                     writer,
                     utf8String,
                     options,

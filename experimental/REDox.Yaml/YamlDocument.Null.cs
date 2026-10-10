@@ -2,7 +2,7 @@
 
 public sealed partial class YamlDocument
 {
-    private uint ParseNull() => AllocToken(DToken.Make(DTokenVariant.Null, payload: 0));
+    private uint CreateNullToken() => AllocToken(DToken.Make(DTokenVariant.Null, payload: 0));
 
     private bool TryParseNull(ParsedScalar scalar, out uint tokenId)
     {
@@ -10,7 +10,7 @@ public sealed partial class YamlDocument
         {
             _utf8TextForTokens.TruncateTo(scalar.Start);
 
-            tokenId = ParseNull();
+            tokenId = CreateNullToken();
 
             return true;
         }
