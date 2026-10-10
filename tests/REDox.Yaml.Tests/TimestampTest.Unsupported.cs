@@ -2,10 +2,9 @@
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlTimestampTest
+public sealed partial class TimestampTest
 {
-    // YAML has no time of day without a date: a local time of another format is written as its text, and it reads
-    // back as a string, because "12:30:00" is not a timestamp (and the library reads no sexagesimal numbers).
+    // YAML 1.1 speced sexagesimal numbers but this serializer won't support it.
     [Fact]
     public void LocalTime_WritesAsTextAndReadsBackAsString()
     {

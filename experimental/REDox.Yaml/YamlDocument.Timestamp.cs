@@ -1,7 +1,4 @@
-﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-using System;
+﻿using System;
 using System.Text;
 using REDox.Serialization;
 
@@ -9,17 +6,25 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
-    private TimeZoneInfo AssumedTimeZone => _parseOptions.AssumedTimeZone ?? TimeZoneInfo.Utc;
-
-    private static bool StartsLikeTimestamp(ReadOnlySpan<byte> text)
+    /// <inheritdoc />
+    protected override DateTime DecodeDateTime(DToken token)
     {
-        return text.Length >= 8
-            && text[4] == YamlSyntax.Dash
-            && YamlSyntax.IsAsciiDigit(text[3])
-            && YamlSyntax.IsAsciiDigit(text[2])
-            && YamlSyntax.IsAsciiDigit(text[1])
-            && YamlSyntax.IsAsciiDigit(text[0]);
+        return TimestampHelper.ToDateTime(
+            Encoding.UTF8.GetString(GetUtf8TextForToken(token)),
+            AssumedTimeZone
+        );
     }
+
+    /// <inheritdoc />
+    protected override DateTimeOffset DecodeDateTimeOffset(DToken token)
+    {
+        return TimestampHelper.ToDateTimeOffset(
+            Encoding.UTF8.GetString(GetUtf8TextForToken(token)),
+            AssumedTimeZone
+        );
+    }
+
+    private TimeZoneInfo AssumedTimeZone => _parseOptions.AssumedTimeZone ?? TimeZoneInfo.Utc;
 
     // Whether a plain value is a timestamp is decided by YamlTimestampHelper.
     // The text is stored exactly as it was written (see WriteTimestamp),
@@ -28,10 +33,10 @@ public sealed partial class YamlDocument
     {
         tokenId = 0;
 
-        var text = _scalars.GetWrittenSpanFromOffset(scalar.Start);
+        var text = _utf8TextForTokens.GetWrittenSpanFromOffset(scalar.Start);
         if (
-            !StartsLikeTimestamp(text)
-            || !YamlTimestampHelper.TryGetKind(Encoding.UTF8.GetString(text), out var kind)
+            !TimestampHelper.StartsLikeTimestamp(text)
+            || !TimestampHelper.TryGetKind(Encoding.UTF8.GetString(text), out var kind)
         )
         {
             return false;
@@ -44,45 +49,30 @@ public sealed partial class YamlDocument
             _ => DTokenVariant.TimestampOffsetDateTime,
         };
 
-        // Core reads a timestamp without an offset through DateTime and then converts it to a DateTimeOffset, which
-        // can only apply UTC (a Utc DateTime) or the local zone of the machine. A zone given in the options would be
-        // ignored, so such a timestamp is stored as an offset timestamp and read through DecodeDateTimeOffset, which
-        // applies the zone. The text, and so what is written, is the same either way.
+        // Core reads a timestamp without an offset through DateTime and then converts it to a DateTimeOffset
+        // which can only apply UTC (a Utc DateTime) or the local zone of the machine.
+        // A zone given in the options would be ignored, so such a timestamp is stored as an offset timestamp
+        // and read through DecodeDateTimeOffset which applies the zone.
         if (variant != DTokenVariant.TimestampOffsetDateTime && AssumedTimeZone != TimeZoneInfo.Utc)
         {
             variant = DTokenVariant.TimestampOffsetDateTime;
         }
 
-        tokenId = CommitScalar(variant, scalar);
+        tokenId = CreateTokenForParsedScalar(variant, scalar);
 
         return true;
     }
 
-    /// <inheritdoc />
-    protected override DateTime DecodeDateTime(DToken token)
+    private static void WriteTimestamp(
+        Utf8TextWriter writer,
+        in DataReader reader,
+        uint tokenId,
+        DToken token
+    )
     {
-        return YamlTimestampHelper.ToDateTime(
-            Encoding.UTF8.GetString(GetStoredScalarBytes(token)),
-            AssumedTimeZone
-        );
-    }
-
-    /// <inheritdoc />
-    protected override DateTimeOffset DecodeDateTimeOffset(DToken token)
-    {
-        return YamlTimestampHelper.ToDateTimeOffset(
-            Encoding.UTF8.GetString(GetStoredScalarBytes(token)),
-            AssumedTimeZone
-        );
-    }
-
-    private static void WriteTimestamp(Utf8TextWriter writer, in DataReader reader, uint tokenId)
-    {
-        var token = reader.GetToken(tokenId);
-
         if (reader.Document is YamlDocument document && !token.IsExtended)
         {
-            writer.WriteString(document.GetStoredScalarBytes(token));
+            writer.WriteString(document.GetUtf8TextForToken(token));
 
             return;
         }

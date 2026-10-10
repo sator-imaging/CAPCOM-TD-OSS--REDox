@@ -1,10 +1,10 @@
-using System;
+﻿using System;
 using System.Globalization;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlPrimitiveValueTest
+public sealed partial class PrimitiveValueTest
 {
     [Theory]
     [InlineData("null")]
@@ -85,11 +85,10 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("123456789012345678901234567890")]
     public void IntegerBeyondSixtyFourBits_PreservesDigits(string yaml)
     {
-        YamlTestHelper.AssertYamlParsesAsJsonValueAndRoundTrips(yaml, yaml);
+        YamlTestFixture.Assert_YamlMatchesJsonValue_YamlRoundTrips(yaml, yaml);
     }
 
     // The YAML 1.1 binary integers and the underscores between digits are numbers (an underscore is for reading only).
-    // The other YAML 1.1 forms are not: "190:20:30" and "0755" as an octal.
     [Theory]
     [InlineData("0b101", 5L)]
     [InlineData("0b1_01", 5L)]
@@ -241,7 +240,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData("true")]
     [InlineData("42")]
     [InlineData("3.5")]
-    public void PrimitiveValue_RoundTripsThroughYaml(string json)
+    public void JsonPrimitiveValue_PreservesJsonRepresentationWhenConvertedToYaml(string json)
     {
         using var sourceJsonDocument = JsonDocument.Parse(json);
 
@@ -292,7 +291,7 @@ public sealed partial class YamlPrimitiveValueTest
     [InlineData(".infinity")]
     [InlineData("+.nan")]
     [InlineData("-.nan")]
-    public void NonSpecialFloatWords_ParseAsStrings(string yaml)
+    public void NonYamlSpecialFloatSpellings_ParseAsStrings(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -300,7 +299,6 @@ public sealed partial class YamlPrimitiveValueTest
         Assert.Equal(yaml, document.RootElement.GetString());
     }
 
-    // Negative zero is a float: written as an integer it would lose its sign.
     [Fact]
     public void NegativeZeroFloat_PreservesSignWhenWritten()
     {
@@ -308,6 +306,7 @@ public sealed partial class YamlPrimitiveValueTest
 
         using var parsed = YamlDocument.Parse(yaml);
 
+        Assert.True(yaml.StartsWith('-'));
         Assert.True(double.IsNegative(parsed.RootElement.GetDouble()));
         Assert.Equal(0.0, parsed.RootElement.GetDouble());
     }
@@ -358,6 +357,34 @@ public sealed partial class YamlPrimitiveValueTest
             using var parsed = YamlDocument.Parse(yaml);
 
             Assert.Equal(1.5, parsed.RootElement.GetDouble());
+        }
+    }
+
+    [Theory]
+    [InlineData("1.0")]
+    [InlineData("1e5")]
+    [InlineData("-0")]
+    [InlineData("18446744073709551616")]
+    public void NumericJson_PreservesParsedValueWhenConvertedToYaml(string json)
+    {
+        using var sourceJsonDocument = JsonDocument.Parse(json);
+
+        foreach (var mode in Enum.GetValues<YamlStringStyle>())
+        {
+            var yamlFromJson = YamlDocument.EncodeToString(
+                sourceJsonDocument.RootElement,
+                new YamlWriteOptions { StringStyle = mode }
+            );
+
+            using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
+
+            Assert.True(
+                DValue.DeepEquals(
+                    sourceJsonDocument.RootElement.AsValue(),
+                    convertedYamlDocument.RootElement.AsValue()
+                ),
+                $"YAML changed {json} in {mode} mode."
+            );
         }
     }
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using REDox.Cbor;
@@ -6,9 +6,9 @@ using REDox.MessagePack;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlFormatConversionTest
+public sealed partial class FormatCompatibilityTest
 {
-    private static readonly Dictionary<string, string> YamlRoundTripSamples = new()
+    private static readonly Dictionary<string, string> YamlRoundTripSourcesByValueShape = new()
     {
         ["scalars"] =
             "{\"s\":\"text\",\"i\":42,\"f\":1.5,\"t\":true,\"u\":false,\"n\":null,\"neg\":-7}",
@@ -47,11 +47,11 @@ public sealed partial class YamlFormatConversionTest
     public static TheoryData<string, string> GetYamlRoundTripCases()
     {
         var roundTripCases = new TheoryData<string, string>();
-        foreach (var format in RoundTripFormatEncoders.Keys)
+        foreach (var targetFormatName in RoundTripFormatEncoders.Keys)
         {
-            foreach (var sample in YamlRoundTripSamples.Keys)
+            foreach (var valueShapeName in YamlRoundTripSourcesByValueShape.Keys)
             {
-                roundTripCases.Add(format, sample);
+                roundTripCases.Add(targetFormatName, valueShapeName);
             }
         }
 
@@ -60,11 +60,17 @@ public sealed partial class YamlFormatConversionTest
 
     [Theory]
     [MemberData(nameof(GetYamlRoundTripCases))]
-    public void YamlRoundTripViaMajorFormat_PreservesValuesAndTypes(string format, string sample)
+    public void YamlRoundTripViaMajorFormat_PreservesParsedValuesAndTypesAtEachStage(
+        string targetFormatName,
+        string valueShapeName
+    )
     {
-        using var sourceYamlDocument = YamlDocument.Parse(YamlRoundTripSamples[sample]);
-        using var yamlAsTargetFormatDocument = RoundTripFormatParsers[format]
-            (RoundTripFormatEncoders[format](sourceYamlDocument.RootElement));
+        using var sourceYamlDocument = YamlDocument.Parse(
+            YamlRoundTripSourcesByValueShape[valueShapeName]
+        );
+
+        using var yamlAsTargetFormatDocument = RoundTripFormatParsers[targetFormatName]
+            (RoundTripFormatEncoders[targetFormatName](sourceYamlDocument.RootElement));
 
         // Check the intermediate value so a later YAML conversion cannot hide a change in the target format.
         Assert.True(
@@ -72,7 +78,7 @@ public sealed partial class YamlFormatConversionTest
                 sourceYamlDocument.RootElement.AsValue(),
                 yamlAsTargetFormatDocument.RootElement.AsValue()
             ),
-            $"Converting {sample} from YAML to {format} changed its value."
+            $"Converting {valueShapeName} from YAML to {targetFormatName} changed its value."
         );
 
         var yamlFromTargetFormat = YamlDocument.EncodeToString(
@@ -81,22 +87,22 @@ public sealed partial class YamlFormatConversionTest
 
         using var restoredYamlDocument = YamlDocument.Parse(yamlFromTargetFormat);
 
-        // Compare the DOM values directly so a scalar changing type cannot pass the round trip.
         Assert.True(
             DValue.DeepEquals(
                 sourceYamlDocument.RootElement.AsValue(),
                 restoredYamlDocument.RootElement.AsValue()
             ),
-            $"YAML round trip through {format} changed {sample}."
+            $"YAML round trip through {targetFormatName} changed {valueShapeName}."
         );
     }
 
-    // Values that only the binary formats hold, converted to YAML. CBOR and MessagePack both carry the map keys as
-    // values, so a map can have integer keys; YAML reads such a key as an integer.
-    private static string ConvertElementToYamlViaBinaryFormat(string format, DElement element)
+    private static string ConvertElementToYamlViaBinaryFormat(
+        string binaryFormatName,
+        DElement sourceElement
+    )
     {
-        using var binaryFormatDocument = RoundTripFormatParsers[format]
-            (RoundTripFormatEncoders[format](element));
+        using var binaryFormatDocument = RoundTripFormatParsers[binaryFormatName]
+            (RoundTripFormatEncoders[binaryFormatName](sourceElement));
 
         return YamlDocument.EncodeToString(
             binaryFormatDocument.RootElement,
@@ -107,9 +113,9 @@ public sealed partial class YamlFormatConversionTest
     [Theory]
     [InlineData("cbor")]
     [InlineData("messagepack")]
-    public void BinaryMapKeysToYaml_PreserveKeyTypes(string format)
+    public void BinaryMapKeysToYaml_PreserveKeyTypesAndValues(string binaryFormatName)
     {
-        var map = new DMap
+        var sourceMapWithScalarKeys = new DMap
         {
             { DValue.Create(1), DValue.Create("integer") },
             { DValue.Create(true), DValue.Create("boolean") },
@@ -117,14 +123,16 @@ public sealed partial class YamlFormatConversionTest
             { DValue.Create(2.5), DValue.Create("float") },
         };
 
-        var yamlFromBinaryFormat = ConvertElementToYamlViaBinaryFormat(format, map.AsElement());
+        var yamlFromBinaryFormat = ConvertElementToYamlViaBinaryFormat(
+            binaryFormatName,
+            sourceMapWithScalarKeys.AsElement()
+        );
 
         using var convertedYamlDocument = YamlDocument.Parse(yamlFromBinaryFormat);
 
-        // Checking key types alone could miss a changed key or value.
         Assert.True(
             DValue.DeepEquals(
-                map.AsElement().AsValue(),
+                sourceMapWithScalarKeys.AsElement().AsValue(),
                 convertedYamlDocument.RootElement.AsValue()
             )
         );
@@ -140,40 +148,47 @@ public sealed partial class YamlFormatConversionTest
     [Theory]
     [InlineData("cbor")]
     [InlineData("messagepack")]
-    public void BinaryTimestampToYaml_PreservesTimestampType(string format)
+    public void BinaryUtcTimestampToYaml_PreservesTimestampTypeAndUtcInstant(
+        string binaryFormatName
+    )
     {
-        // A UTC time: MessagePack keeps the offset of a DateTimeOffset in a list next to the timestamp, which is its
-        // own way of storing it and not a timestamp.
-        var value = new DateTime(2001, 12, 14, 21, 59, 43, DateTimeKind.Utc);
+        // Uses UTC time
+        // MessagePack keeps the offset of a DateTimeOffset in a list next to the timestamp,
+        // which is its own way of storing it and not a timestamp (not spec-ed by MsgPack format).
+        var sourceUtcTimestamp = new DateTime(2001, 12, 14, 21, 59, 43, DateTimeKind.Utc);
 
         var yamlFromBinaryFormat = ConvertElementToYamlViaBinaryFormat(
-            format,
-            DValue.Create(value).AsElement()
+            binaryFormatName,
+            DValue.Create(sourceUtcTimestamp).AsElement()
         );
 
         using var convertedYamlDocument = YamlDocument.Parse(yamlFromBinaryFormat);
 
-        // Timestamp text can change across CBOR and YAML even when the UTC time does not; DeepEquals compares that text.
         Assert.True(
             convertedYamlDocument.RootElement.Token.Kind == DTokenKind.Timestamp,
             $"YAML: {yamlFromBinaryFormat}"
         );
 
-        Assert.Equal(value, convertedYamlDocument.RootElement.GetDateTimeOffset().UtcDateTime);
+        Assert.Equal(
+            sourceUtcTimestamp,
+            convertedYamlDocument.RootElement.GetDateTimeOffset().UtcDateTime
+        );
     }
 
     [Theory]
     [InlineData("cbor")]
     [InlineData("messagepack")]
-    public void YamlCompatibleNestedValuesViaBinaryFormat_PreserveValueKinds(string format)
+    public void YamlCompatibleNestedValuesViaBinaryFormat_PreserveParsedValuesAndKinds(
+        string binaryFormatName
+    )
     {
-        var json =
+        var nestedJsonSource =
             "{\"s\":\"text\",\"i\":42,\"f\":1.5,\"t\":true,\"n\":null,\"l\":[1,[2,3],{\"k\":\"v\"}],\"m\":{\"a\":{\"b\":[]}}}";
 
-        using var sourceJsonDocument = Json.JsonDocument.Parse(json);
+        using var sourceJsonDocument = Json.JsonDocument.Parse(nestedJsonSource);
 
         var yamlFromBinaryFormat = ConvertElementToYamlViaBinaryFormat(
-            format,
+            binaryFormatName,
             sourceJsonDocument.RootElement
         );
 

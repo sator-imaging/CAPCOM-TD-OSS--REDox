@@ -1,17 +1,14 @@
-﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-namespace REDox.Yaml;
+﻿namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
-    private uint ParseNull() => AllocToken(DToken.Make(DTokenVariant.Null, 0));
+    private uint ParseNull() => AllocToken(DToken.Make(DTokenVariant.Null, payload: 0));
 
     private bool TryParseNull(ParsedScalar scalar, out uint tokenId)
     {
-        if (YamlSyntax.IsNullScalar(_scalars.GetWrittenSpanFromOffset(scalar.Start)))
+        if (YamlSyntax.IsNullScalar(_utf8TextForTokens.GetWrittenSpanFromOffset(scalar.Start)))
         {
-            _scalars.TruncateTo(scalar.Start);
+            _utf8TextForTokens.TruncateTo(scalar.Start);
 
             tokenId = ParseNull();
 

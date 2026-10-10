@@ -1,9 +1,7 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Text;
 using System.Text.Unicode;
@@ -13,51 +11,83 @@ using REDox.Serialization;
 namespace REDox.Yaml;
 
 /// <summary>
-/// A YAML document read into the REDox document model. Block and flow collections, plain, quoted and block scalars,
-/// comments, and map keys that are scalars (null, boolean, number, timestamp or string, plain or explicit with "?")
-/// are supported. The keys of a map are read as values, so a key that is not a string is reached through
-/// <see cref="DElement.AsMap" />. Anchors and aliases, tags, directives, several documents in one stream, and a
-/// collection as a key are not: reading them fails with a <see cref="DocumentParseException" />. A stream with no
-/// content reads as a single null value. Text in UTF-8 is read where it is, without a copy.
-///
+/// A YAML document read into the REDox document model.
 /// </summary>
 public sealed partial class YamlDocument : Document
 {
-    private YamlPooledBuffer _scalars = new();
-    private List<uint> _trailingTrivia = [];
+    private enum ScalarKeyContext
+    {
+        Value,
+        ImplicitMapKey,
+        ExplicitMapKey,
+    }
+
+    internal const int StackLimit = 128;
+
+    // ReadDocument sizes this buffer from the input, so renting the default small array first only causes a second rent.
+    // Tokens retain offsets into this buffer after parsing, so it must live as long as the document.
+    private PooledBufferWriter _utf8TextForTokens = new(initialCapacity: 0);
+
+    private readonly record struct TrailingComment(int Offset, int Length);
+
+    private Dictionary<uint, TrailingComment> _trailingCommentsByNodeId = [];
+    private uint _lastParsedNodeId;
 
     private ReadOnlyMemory<byte> _source;
     private int _position;
     private YamlDocumentOptions _parseOptions;
 
-    private ReadOnlySpan<byte> Source => _source.Span;
-
     private YamlDocument(SerializerSettings settings)
-        : base(settings) { }
+        : base(settings)
+    {
+    }
 
     /// <summary>
-    /// Copies the document. The copy has its own data, so editing either one never changes the other.
+    /// Deep copies the document.
     /// </summary>
-    /// <returns>The copy, which the caller disposes.</returns>
+    /// <returns>The copy which the caller needs to dispose.</returns>
     public YamlDocument Duplicate()
     {
         // CreateSnapshot is a shallow clone.
         // The copy needs its own buffers so later edits stay independent.
         var document = CreateSnapshot<YamlDocument>();
 
-        document._scalars = _scalars.Duplicate();
-        document._trailingTrivia = [.. _trailingTrivia];
+        document._utf8TextForTokens = _utf8TextForTokens.Duplicate();
+        document._trailingCommentsByNodeId = new Dictionary<uint, TrailingComment>(
+            _trailingCommentsByNodeId
+        );
 
         return document;
     }
 
+    /// <inheritdoc/>
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _utf8TextForTokens.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private ReadOnlySpan<byte> Source => _source.Span;
+
     /// <summary>
-    /// Verifies that this document retains its value when written as JSON, read back, then written and read as YAML.
+    /// Verifies that the document retains its original value during format conversion.
+    /// <code>
+    /// 1. Writes the document as JSON.
+    /// 2. Reads written JSON back as a REDox document.
+    ///    Compares it with the original document and throws if values are different.
+    /// 3. Writes the document from JSON as YAML.
+    /// 4. Reads written YAML back as a REDox document.
+    ///    Compares its value with the original document and throws if values are different.
+    /// </code>
     /// </summary>
     /// <param name="options">How the YAML is written.</param>
     /// <param name="expectedOriginalElement">An optional source element to compare with the JSON read back.</param>
-    /// <exception cref="DocumentParseException">A conversion changes the parsed value.</exception>
-    public void ValidateJsonYamlRoundTripPreservesValues(
+    /// <exception cref="DocumentParseException"/>
+    public void ValidateJsonAndYamlRoundTrip(
         YamlWriteOptions options = default,
         DElement? expectedOriginalElement = null
     )
@@ -70,7 +100,7 @@ public sealed partial class YamlDocument : Document
         if (!DValue.DeepEquals(RootElement.AsValue(), readbackJsonObj.RootElement.AsValue()))
         {
             ThrowParseError(
-                ParseException.ErrorCode.InvalidValue,
+                ParseException.ErrorCode.FormatCompatibility,
                 "Writing and reading JSON changed the YAML value."
             );
         }
@@ -81,7 +111,7 @@ public sealed partial class YamlDocument : Document
         )
         {
             ThrowParseError(
-                ParseException.ErrorCode.InvalidValue,
+                ParseException.ErrorCode.FormatCompatibility,
                 "The JSON value produced from YAML differs from the expected original value."
             );
         }
@@ -93,36 +123,27 @@ public sealed partial class YamlDocument : Document
         if (!DValue.DeepEquals(RootElement.AsValue(), readbackYamlObj.RootElement.AsValue()))
         {
             ThrowParseError(
-                ParseException.ErrorCode.InvalidValue,
+                ParseException.ErrorCode.FormatCompatibility,
                 "Writing and reading YAML from the parsed JSON changed the original YAML value."
             );
         }
     }
 
     /// <summary>
-    /// Returns the buffer that holds the scalars of the document to the array pool, and then disposes the document as
-    /// the base class does. The values of the document cannot be read afterwards.
+    /// Reads a YAML document from a stream.
     /// </summary>
-    /// <param name="disposing">True when the document is disposed, false when it is finalized.</param>
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _scalars.Dispose();
-        }
-
-        base.Dispose(disposing);
-    }
-
-    /// <summary>
-    /// Reads a YAML document from a stream. The stream is read to its end and is not closed.
-    /// </summary>
-    /// <param name="stream">The stream that holds the text: UTF-8 or, with <see cref="YamlDocumentOptions.AutoDetectEncoding" />, another encoding that starts with a byte order mark.</param>
-    /// <param name="settings">The serializer settings of the document. The default settings when null.</param>
+    /// <remarks>
+    /// The stream is read to its end and is not closed.
+    /// </remarks>
+    /// <param name="stream">
+    /// The UTF-8 byte stream.
+    /// Set <see cref="YamlDocumentOptions.AutoDetectEncoding"/> to convert from another encoding.
+    /// </param>
+    /// <param name="settings">The serializer settings of the document.</param>
     /// <param name="options">How the text is read.</param>
-    /// <returns>The document, which the caller disposes.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="stream" /> is null.</exception>
-    /// <exception cref="DocumentParseException">The text is not valid YAML, or uses a feature that is not supported.</exception>
+    /// <returns>The document which the caller needs to dispose.</returns>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="DocumentParseException"/>
     public static YamlDocument Parse(
         Stream stream,
         SerializerSettings? settings = null,
@@ -133,7 +154,8 @@ public sealed partial class YamlDocument : Document
 
         var bufferSize = (settings ?? SerializerSettings.Default).DefaultBufferSize;
 
-        using var buffer = new YamlPooledBuffer(bufferSize);
+        // Parse releases the source before returning, so the using scope can dispose the input buffer.
+        using var buffer = new PooledBufferWriter(bufferSize);
 
         int bytesRead;
         while ((bytesRead = stream.Read(buffer.GetSpan(bufferSize))) > 0)
@@ -141,7 +163,6 @@ public sealed partial class YamlDocument : Document
             buffer.Advance(bytesRead);
         }
 
-        // Parse releases the source before returning, so the using scope can dispose the input buffer.
         return Parse(buffer.WrittenMemory, settings, options);
     }
 
@@ -149,11 +170,11 @@ public sealed partial class YamlDocument : Document
     /// Reads a YAML document from a string.
     /// </summary>
     /// <param name="yaml">The YAML text.</param>
-    /// <param name="settings">The serializer settings of the document. The default settings when null.</param>
+    /// <param name="settings">The serializer settings of the document.</param>
     /// <param name="options">How the text is read.</param>
-    /// <returns>The document, which the caller disposes.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="yaml" /> is null.</exception>
-    /// <exception cref="DocumentParseException">The text is not valid YAML, or uses a feature that is not supported.</exception>
+    /// <returns>The document which the caller needs to dispose.</returns>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="DocumentParseException"/>
     public static YamlDocument Parse(
         string yaml,
         SerializerSettings? settings = null,
@@ -162,19 +183,24 @@ public sealed partial class YamlDocument : Document
     {
         ArgumentNullException.ThrowIfNull(yaml);
 
-        return Parse(Encoding.UTF8.GetBytes(yaml), settings, options);
+        // Parse releases the source before returning, so the using scope can dispose the input buffer.
+        using var buffer = new PooledBufferWriter(yaml.Length);
+
+        Encoding.UTF8.GetBytes(yaml, buffer);
+
+        return Parse(buffer.WrittenMemory, settings, options);
     }
 
     /// <summary>
-    /// Reads a YAML document from UTF-8 bytes. A UTF-8 byte order mark is skipped. Text in another encoding is
-    /// converted only when <see cref="YamlDocumentOptions.AutoDetectEncoding" /> is set.
+    /// Reads a YAML document from UTF-8 bytes.
+    /// Non-UTF-8 is converted only when <see cref="YamlDocumentOptions.AutoDetectEncoding"/> is set.
     /// </summary>
     /// <param name="utf8Yaml">The UTF-8 text.</param>
-    /// <param name="settings">The serializer settings of the document. The default settings when null.</param>
+    /// <param name="settings">The serializer settings of the document.</param>
     /// <param name="options">How the text is read.</param>
-    /// <returns>The document, which the caller disposes.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="utf8Yaml" /> is null.</exception>
-    /// <exception cref="DocumentParseException">The text is not valid UTF-8 or YAML, or uses a feature that is not supported.</exception>
+    /// <returns>The document which the caller needs to dispose.</returns>
+    /// <exception cref="ArgumentNullException"/>
+    /// <exception cref="DocumentParseException"/>
     public static YamlDocument Parse(
         byte[] utf8Yaml,
         SerializerSettings? settings = null,
@@ -187,20 +213,21 @@ public sealed partial class YamlDocument : Document
     }
 
     /// <summary>
-    /// Reads a YAML document from UTF-8 bytes. A UTF-8 byte order mark is skipped. Text in another encoding is
-    /// converted only when <see cref="YamlDocumentOptions.AutoDetectEncoding" /> is set.
+    /// Reads a YAML document from UTF-8 bytes.
+    /// Non-UTF-8 is converted only when <see cref="YamlDocumentOptions.AutoDetectEncoding"/> is set.
     /// </summary>
     /// <param name="utf8Yaml">The UTF-8 text.</param>
-    /// <param name="settings">The serializer settings of the document. The default settings when null.</param>
+    /// <param name="settings">The serializer settings of the document.</param>
     /// <param name="options">How the text is read.</param>
-    /// <returns>The document, which the caller disposes.</returns>
-    /// <exception cref="DocumentParseException">The text is not valid UTF-8 or YAML, or uses a feature that is not supported.</exception>
+    /// <returns>The document which the caller needs to dispose.</returns>
+    /// <exception cref="DocumentParseException"/>
     public static YamlDocument Parse(
         ReadOnlyMemory<byte> utf8Yaml,
         SerializerSettings? settings = null,
         YamlDocumentOptions options = default
     )
     {
+        // Don't dispose if successfully loaded
         var document = new YamlDocument(settings ?? SerializerSettings.Default);
 
         try
@@ -221,45 +248,55 @@ public sealed partial class YamlDocument : Document
     /// Reads a YAML document from UTF-8 bytes without throwing when the text cannot be read.
     /// </summary>
     /// <param name="utf8Yaml">The UTF-8 text.</param>
-    /// <param name="document">The document, which the caller disposes, or null when the text could not be read.</param>
-    /// <param name="settings">The serializer settings of the document. The default settings when null.</param>
+    /// <param name="document">
+    /// The document which the caller needs to dispose.
+    /// <see langword="null"/> when the text could not be read.
+    /// </param>
+    /// <param name="settings">The serializer settings of the document.</param>
     /// <param name="options">How the text is read.</param>
-    /// <returns>True when the text was read; false when it is not valid UTF-8 or YAML, or uses a feature that is not supported.</returns>
+    /// <returns>Whether text was read and <paramref name="document"/> is not null.</returns>
     public static bool TryParse(
-        ReadOnlySpan<byte> utf8Yaml,
-        out YamlDocument? document,
+        ReadOnlyMemory<byte> utf8Yaml,
+        [NotNullWhen(true)] out YamlDocument? document,
         SerializerSettings? settings = null,
         YamlDocumentOptions options = default
     )
     {
         try
         {
-            document = Parse(utf8Yaml.ToArray(), settings, options);
+            document = Parse(utf8Yaml, settings, options);
 
             return true;
         }
         catch (DocumentParseException)
         {
-            document = null;
+            document = null; // Just set to null as Parse disposes on failure
 
             return false;
         }
     }
 
     /// <summary>
-    /// Writes an element as YAML, in block style, to a new array of UTF-8 bytes.
+    /// Writes an element as YAML to a new array of UTF-8 bytes.
     /// </summary>
-    /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
+    /// <param name="element">The element to write. Not only a YAML document.</param>
     /// <param name="options">How the YAML is written.</param>
     /// <returns>The UTF-8 bytes.</returns>
-    /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
+    /// <exception cref="DocumentParseException"/>
     public static byte[] Encode(DElement element, YamlWriteOptions options = default)
     {
-        using var writer = new Utf8TextWriter(
+        // Reset before each use so the cached writer keeps its pooled buffer without retaining prior output.
+        using var cache = Helper.InstanceCache<Utf8TextWriter>.Get(static () =>
+            new Utf8TextWriter(SerializerSettings.Default)
+        );
+
+        var writer = cache.Value;
+
+        writer.Reset(
             element.Document.Settings,
             options.TextWriteOptions with
             {
-                WriteIndented = true,
+                WriteIndented = true, // Always true
             }
         );
 
@@ -269,34 +306,15 @@ public sealed partial class YamlDocument : Document
     }
 
     /// <summary>
-    /// Writes an element as YAML, in block style, to a string.
+    /// Writes an element as YAML as UTF-8 to a stream.
     /// </summary>
-    /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
-    /// <param name="options">How the YAML is written.</param>
-    /// <returns>The YAML text.</returns>
-    /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
-    public static string EncodeToString(DElement element, YamlWriteOptions options = default)
-    {
-        using var writer = new Utf8TextWriter(
-            element.Document.Settings,
-            options.TextWriteOptions with
-            {
-                WriteIndented = true,
-            }
-        );
-
-        Write(writer, new DataReader(element), options);
-
-        return writer.EncodeToString();
-    }
-
-    /// <summary>
-    /// Writes an element as YAML, in block style, as UTF-8 to a stream. The stream is not closed.
-    /// </summary>
-    /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
+    /// <remarks>
+    /// The stream is not closed on write.
+    /// </remarks>
+    /// <param name="element">The element to write. Not only a YAML document.</param>
     /// <param name="stream">The stream to write to.</param>
     /// <param name="options">How the YAML is written.</param>
-    /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
+    /// <exception cref="DocumentParseException"/>
     public static void EncodeTo(DElement element, Stream stream, YamlWriteOptions options = default)
     {
         using var writer = new Utf8TextWriter(
@@ -304,7 +322,7 @@ public sealed partial class YamlDocument : Document
             element.Document.Settings,
             options.TextWriteOptions with
             {
-                WriteIndented = true,
+                WriteIndented = true, // Always true
             }
         );
 
@@ -312,9 +330,9 @@ public sealed partial class YamlDocument : Document
     }
 
     /// <summary>
-    /// Writes an element as YAML, in block style, as UTF-8 to a buffer writer.
+    /// Writes an element as YAML as UTF-8 to a buffer writer.
     /// </summary>
-    /// <param name="element">The element to write. It can come from any document, not only a YAML document.</param>
+    /// <param name="element">The element to write. Not only a YAML document.</param>
     /// <param name="bufferWriter">The buffer writer to write to.</param>
     /// <param name="options">How the YAML is written.</param>
     /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
@@ -329,19 +347,45 @@ public sealed partial class YamlDocument : Document
             element.Document.Settings,
             options.TextWriteOptions with
             {
-                WriteIndented = true,
+                WriteIndented = true, // Always true
             }
         );
 
         Write(writer, new DataReader(element), options);
     }
 
-    private void Read(ReadOnlyMemory<byte> source, YamlDocumentOptions options)
+    /// <summary>
+    /// Writes an element as YAML text.
+    /// </summary>
+    /// <param name="element">The element to write. Not only a YAML document.</param>
+    /// <param name="options">How the YAML is written.</param>
+    /// <returns>The YAML text.</returns>
+    /// <exception cref="DocumentParseException">A string cannot be written in the chosen <see cref="YamlStringStyle" />.</exception>
+    public static string EncodeToString(DElement element, YamlWriteOptions options = default)
+    {
+        // The text path benefits from the same resettable pooled buffer as the byte-array path.
+        using var cache = Helper.InstanceCache<Utf8TextWriter>.Get(static () =>
+            new Utf8TextWriter(SerializerSettings.Default)
+        );
+
+        var writer = cache.Value;
+
+        writer.Reset(
+            element.Document.Settings,
+            options.TextWriteOptions with
+            {
+                WriteIndented = true, // Always true
+            }
+        );
+
+        Write(writer, new DataReader(element), options);
+
+        return writer.EncodeToString();
+    }
+
+    private void Read(ReadOnlyMemory<byte> source, in YamlDocumentOptions options)
     {
         _parseOptions = options;
-
-        // Text that is UTF-8 already is read where it is. Only text in another encoding rents buffer storage.
-        using var decodedBuffer = new YamlPooledBuffer(0);
 
         try
         {
@@ -355,33 +399,65 @@ public sealed partial class YamlDocument : Document
 
                 if (!detected || kind == TextEncodingKind.Utf8 || !options.AutoDetectEncoding)
                 {
-                    _source = RequireValidUtf8(
-                        detected && kind == TextEncodingKind.Utf8 ? source.Slice(skipBytes) : source
-                    );
+                    var candidate =
+                        detected && kind == TextEncodingKind.Utf8 ? source[skipBytes..] : source;
+
+                    if (!Utf8.IsValid(candidate.Span))
+                    {
+                        ThrowParseError(
+                            ParseException.ErrorCode.InvalidEncoding,
+                            "The text is not valid UTF-8."
+                        );
+                    }
+
+                    _source = candidate;
                 }
                 else
                 {
-                    Encoding encoding = kind switch
+                    _source = ConvertToUtf8(kind, skipBytes, source);
+
+                    static ReadOnlyMemory<byte> ConvertToUtf8(
+                        TextEncodingKind kind,
+                        int skipBytes,
+                        ReadOnlyMemory<byte> source
+                    )
                     {
-                        TextEncodingKind.Utf16LittleEndian => new UnicodeEncoding(
-                            false,
-                            false,
-                            true
-                        ),
-                        TextEncodingKind.Utf16BigEndian => new UnicodeEncoding(true, false, true),
-                        TextEncodingKind.Utf32LittleEndian => new UTF32Encoding(false, false, true),
-                        _ => new UTF32Encoding(true, false, true),
-                    };
+                        using var decodedBuffer = new PooledBufferWriter();
 
-                    var text = encoding.GetString(source.Span[skipBytes..]);
-                    var length = Encoding.UTF8.GetBytes(
-                        text.AsSpan(),
-                        decodedBuffer.GetSpan(Encoding.UTF8.GetMaxByteCount(text.Length))
-                    );
+                        Encoding encoding = kind switch
+                        {
+                            TextEncodingKind.Utf16LittleEndian => new UnicodeEncoding(
+                                bigEndian: false,
+                                byteOrderMark: false,
+                                throwOnInvalidBytes: true
+                            ),
+                            TextEncodingKind.Utf16BigEndian => new UnicodeEncoding(
+                                bigEndian: true,
+                                byteOrderMark: false,
+                                throwOnInvalidBytes: true
+                            ),
+                            TextEncodingKind.Utf32LittleEndian => new UTF32Encoding(
+                                bigEndian: false,
+                                byteOrderMark: false,
+                                throwOnInvalidCharacters: true
+                            ),
+                            _ => new UTF32Encoding(
+                                bigEndian: true,
+                                byteOrderMark: false,
+                                throwOnInvalidCharacters: true
+                            ),
+                        };
 
-                    decodedBuffer.Advance(length);
+                        var text = encoding.GetString(source.Span[skipBytes..]);
+                        var length = Encoding.UTF8.GetBytes(
+                            text.AsSpan(),
+                            decodedBuffer.GetSpan(Encoding.UTF8.GetMaxByteCount(text.Length))
+                        );
 
-                    _source = decodedBuffer.WrittenMemory;
+                        decodedBuffer.Advance(length);
+
+                        return decodedBuffer.WrittenMemory;
+                    }
                 }
             }
             catch (DecoderFallbackException)
@@ -404,12 +480,18 @@ public sealed partial class YamlDocument : Document
 
         EnsureCapacity(_source.Length / 8);
 
+        // TODO: Scalar text usually occupies less than half the input (not profiled).
+        _utf8TextForTokens.EnsureCapacity(_source.Length >> 1);
+
         _position = 0;
 
-        SkipTrivia();
+        SkipTrivia(leaveSameLineCommentForNextNode: false);
 
         var contentOnMarkerLine = false;
         var markerLineStart = 0;
+
+        // TODO: support multiple documents in a file.
+        // NOTE: this is required to pass YAML test suite.
         if (IsMarkerAtPosition(_position, YamlSyntax.DocumentStartUtf8))
         {
             markerLineStart = FindCurrentLineStart(_position);
@@ -420,7 +502,7 @@ public sealed partial class YamlDocument : Document
             // Content may follow the marker on its line ("--- text") but then it cannot be a block collection.
             if (
                 _position < Source.Length
-                && !IsLineEnd(Source[_position])
+                && !YamlSyntax.IsLineEnd(Source[_position])
                 && Source[_position] != YamlSyntax.CommentIndicator
             )
             {
@@ -428,7 +510,7 @@ public sealed partial class YamlDocument : Document
             }
             else
             {
-                SkipTrivia();
+                SkipTrivia(leaveSameLineCommentForNextNode: false);
             }
         }
 
@@ -436,7 +518,7 @@ public sealed partial class YamlDocument : Document
         {
             // NOTE / TODO:
             //   An input with no content (empty, or only comments and blank lines) still gets a null root.
-            //   Core has no "empty document" classification. A document is valid only while RootId > 0,
+            //   Core data model has no "empty document" classification. A document is valid only while RootId > 0,
             //   and trivia is only ever attached to the token that follows it.
             //   The null token keeps RootId valid and gives the comments a token to attach to, so they are preserved.
             RootId = ParseNull();
@@ -445,31 +527,14 @@ public sealed partial class YamlDocument : Document
         }
 
         // The root node's parent indentation is -1, so block scalars may start at column 0.
-        RootId = ParseNode(0, parentIndent: -1, mapValueOnKeyLine: contentOnMarkerLine);
+        RootId = ParseNode(depth: 0, parentIndent: -1, mapValueOnKeyLine: contentOnMarkerLine);
 
         if (contentOnMarkerLine && FindCurrentLineStart(_position) == markerLineStart)
         {
             ExpectLineEnd();
         }
 
-        SkipTrivia();
-
-        if (options.PreserveTrivia)
-        {
-            var trailingStart = (uint)GetTokens().Length;
-            while (trailingStart > RootId && GetToken(trailingStart - 1).Kind == DTokenKind.Trivia)
-            {
-                trailingStart--;
-            }
-
-            for (var triviaId = trailingStart; triviaId < GetTokens().Length; triviaId++)
-            {
-                if (GetToken(triviaId).Kind == DTokenKind.Trivia)
-                {
-                    _trailingTrivia.Add(triviaId);
-                }
-            }
-        }
+        SkipTrivia(leaveSameLineCommentForNextNode: false);
 
         if (_position < Source.Length)
         {
@@ -477,25 +542,12 @@ public sealed partial class YamlDocument : Document
         }
     }
 
-    private ReadOnlyMemory<byte> RequireValidUtf8(ReadOnlyMemory<byte> text)
-    {
-        if (!Utf8.IsValid(text.Span))
-        {
-            ThrowParseError(
-                ParseException.ErrorCode.InvalidEncoding,
-                "The text is not valid UTF-8."
-            );
-        }
-
-        return text;
-    }
-
     private uint ParseNode(
         int depth,
         bool flow = false,
         int parentIndent = 0,
         bool mapValueOnKeyLine = false,
-        bool isKey = false
+        ScalarKeyContext keyContext = ScalarKeyContext.Value
     )
     {
         RequireAllowedDepth(depth);
@@ -507,33 +559,40 @@ public sealed partial class YamlDocument : Document
 
         // A block collection cannot start on the same line as the key it belongs to ("a: b: c", "a: - b").
         var blockAllowed = !flow && !mapValueOnKeyLine;
+        var first = Source[_position];
 
         if (
-            Source[_position]
+            first
                 is YamlSyntax.AnchorIndicator
-                    or YamlSyntax.AliasIndicator
-                    or YamlSyntax.TagIndicator
-                    or YamlSyntax.DirectiveIndicator
+                or YamlSyntax.AliasIndicator
+                or YamlSyntax.TagIndicator
+                or YamlSyntax.DirectiveIndicator
             // An explicit key is read by the block map that holds it (see ParseExplicitMapEntry); anywhere else the
             // "?" that stands alone is not supported. "?x" is a plain scalar.
-            || IsExplicitKeyStart(flow) && !(blockAllowed && IsExplicitKeyStart(false))
-            || IsMarkerAtPosition(_position, YamlSyntax.DocumentStartUtf8)
-            || IsMarkerAtPosition(_position, YamlSyntax.DocumentEndUtf8)
+            || !blockAllowed && first == YamlSyntax.ExplicitKeyIndicator && IsExplicitKeyStart(flow)
+            // Only these first bytes can begin a document marker; most nodes need no marker comparison.
+            || first == YamlSyntax.Dash
+            && IsMarkerAtPosition(_position, YamlSyntax.DocumentStartUtf8)
+            || first == YamlSyntax.Dot && IsMarkerAtPosition(_position, YamlSyntax.DocumentEndUtf8)
         )
         {
             ThrowParseError(ParseException.ErrorCode.UnsupportedFeature);
         }
 
-        return Source[_position] switch
+        var nodeId = first switch
         {
             YamlSyntax.FlowSequenceStart => ParseFlowArray(depth, parentIndent),
             YamlSyntax.FlowMappingStart => ParseFlowMap(depth, parentIndent),
             YamlSyntax.Dash when blockAllowed && IsBlockSequenceIndicator(_position) =>
                 ParseBlockArray(depth),
-            _ when blockAllowed && (IsExplicitKeyStart(false) || IsBlockMapStart()) =>
+            _ when blockAllowed && (IsExplicitKeyStart(flow: false) || IsBlockMapStart()) =>
                 ParseBlockMap(depth),
-            _ => ParseScalarNode(parentIndent: parentIndent, flow: flow, isKey: isKey),
+            _ => ParseScalarNode(keyContext, parentIndent, flow),
         };
+
+        _lastParsedNodeId = nodeId;
+
+        return nodeId;
     }
 
     // Keys, omitted values and implicit flow maps also create nodes without passing through ParseNode.
@@ -546,16 +605,13 @@ public sealed partial class YamlDocument : Document
         }
     }
 
-    // "key" is an implicit key, which cannot span lines.
-    // "isKey" is any map key, explicit ones included (they can).
     private uint ParseScalarNode(
-        bool key = false,
+        ScalarKeyContext keyContext,
         int parentIndent = 0,
-        bool flow = false,
-        bool isKey = false
+        bool flow = false
     )
     {
-        if (_position >= Source.Length || IsLineEnd(Source[_position]))
+        if (_position >= Source.Length || YamlSyntax.IsLineEnd(Source[_position]))
         {
             return ParseNull();
         }
@@ -565,29 +621,63 @@ public sealed partial class YamlDocument : Document
         {
             YamlSyntax.DoubleQuote => ParseDoubleQuotedString(parentIndent),
             YamlSyntax.SingleQuote => ParseSingleQuotedString(parentIndent),
-            YamlSyntax.LiteralBlockIndicator or YamlSyntax.FoldedBlockIndicator when !key =>
+            YamlSyntax.LiteralBlockIndicator
+                or YamlSyntax.FoldedBlockIndicator when keyContext != ScalarKeyContext.ImplicitMapKey =>
                 ParseBlockString(parentIndent),
-            _ => ParsePlainString(key, flow, parentIndent),
+            _ => ParsePlainString(
+                keyContext == ScalarKeyContext.ImplicitMapKey,
+                flow,
+                parentIndent
+            ),
         };
 
         if (_parseOptions.EnableValueValidation)
         {
-            ValidateScalarSourceCharacters(scalarSourceStart);
+            RejectDisallowedCharactersInYamlScalarSourceText(scalarSourceStart);
         }
 
         // A quoted scalar is always a string.
         // A plain key is resolved like a plain value (null, boolean, number, timestamp or string),
         // so "1: a" is a map entry whose key is the integer 1, unless ReadMapKeyAsString is set.
-        return value.Quoted || (key || isKey) && _parseOptions.ReadMapKeyAsString
-                ? CommitScalar(DTokenVariant.String, value)
-            : TryParseNull(value, out var nullId) ? nullId
-            : TryParseBoolean(value, out var booleanId) ? booleanId
-            : TryParseNumber(value, out var numberId) ? numberId
-            : TryParseTimestamp(value, out var timestampId) ? timestampId
-            : CommitScalar(DTokenVariant.String, value);
+        if (
+            value.Quoted
+            || keyContext != ScalarKeyContext.Value && _parseOptions.ReadMapKeyAsString
+        )
+        {
+            return CreateTokenForParsedScalar(DTokenVariant.String, value);
+        }
+
+        var text = _utf8TextForTokens.GetWrittenSpanFromOffset(value.Start);
+        if (
+            (text.IsEmpty || text[0] is (byte)'~' or (byte)'n' or (byte)'N')
+            && TryParseNull(value, out var nullId)
+        )
+        {
+            return nullId;
+        }
+
+        // A plain scalar can enter only the type readers whose spellings begin with its first byte.
+        // Avoid invoking every reader for ordinary map keys while preserving null, boolean, number,
+        // timestamp and string resolution in that order.
+        return !text.IsEmpty
+               && YamlSyntax.IsBooleanScalarStart(text[0])
+               && TryParseBoolean(value, out var booleanId)
+            ? booleanId
+            : !text.IsEmpty
+              && (
+                  YamlSyntax.IsAsciiDigit(text[0])
+                  || text[0] is YamlSyntax.Plus or YamlSyntax.Dash or YamlSyntax.Dot
+              )
+              && TryParseNumber(value, out var numberId)
+                ? numberId
+                : !text.IsEmpty
+                  && YamlSyntax.IsAsciiDigit(text[0])
+                  && TryParseTimestamp(value, out var timestampId)
+                    ? timestampId
+                    : CreateTokenForParsedScalar(DTokenVariant.String, value);
     }
 
-    private void ValidateScalarSourceCharacters(int scalarSourceStart)
+    private void RejectDisallowedCharactersInYamlScalarSourceText(int scalarSourceStart)
     {
         // YAML 1.2.2 section 5.1, c-printable (production [1])
         // Raw source permits TAB, LF, CR, U+0020..U+007E, U+0085, U+00A0..U+D7FF, U+E000..U+FFFD and U+10000..U+10FFFF.
@@ -600,15 +690,22 @@ public sealed partial class YamlDocument : Document
             Source[scalarSourceStart] is YamlSyntax.SingleQuote or YamlSyntax.DoubleQuote;
 
         var scalarSourceEnd = _position;
-        for (var position = scalarSourceStart; position < scalarSourceEnd; )
+        for (var position = scalarSourceStart; position < scalarSourceEnd;)
         {
-            Rune.DecodeFromUtf8(
-                Source[position..scalarSourceEnd],
-                out var character,
-                out var consumed
-            );
+            // An ASCII byte is already a complete code point, so only multibyte text needs Rune decoding.
+            var codePoint = (int)Source[position];
+            var consumed = 1;
+            if (codePoint >= 0x80)
+            {
+                Rune.DecodeFromUtf8(
+                    Source[position..scalarSourceEnd],
+                    out var character,
+                    out consumed
+                );
 
-            var codePoint = character.Value;
+                codePoint = character.Value;
+            }
+
             var allowedCharacter =
                 codePoint is YamlSyntax.Tab or YamlSyntax.LineFeed or YamlSyntax.CarriageReturn
                 || (
@@ -616,14 +713,14 @@ public sealed partial class YamlDocument : Document
                         ? codePoint >= 0x20
                         : codePoint
                             is >= 0x20
-                                and <= 0x7e
-                                or 0x85
-                                or >= 0xa0
-                                and <= 0xd7ff
-                                or >= 0xe000
-                                and <= 0xfffd
-                                or >= 0x10000
-                                and <= 0x10ffff
+                            and <= 0x7e
+                            or 0x85
+                            or >= 0xa0
+                            and <= 0xd7ff
+                            or >= 0xe000
+                            and <= 0xfffd
+                            or >= 0x10000
+                            and <= 0x10ffff
                 );
 
             if (!allowedCharacter)
@@ -638,47 +735,64 @@ public sealed partial class YamlDocument : Document
         }
     }
 
-    /// <summary>
-    /// The bytes of a scalar that is being read.
-    /// The scalar buffer, from Start to the end of what is stored, where the reading of the scalar builds them.
-    /// Nothing else is stored while a scalar is read.
-    /// They become a token with CommitScalar (a number keeps its text, as it was written),
-    /// or are dropped by truncating the scalar buffer (a null and a boolean need no text of their own).
-    /// </summary>
-    private readonly record struct ParsedScalar(int Start, bool Quoted);
+    private readonly record struct ParsedScalar(
+        int Start,
+        bool Quoted,
+        TrailingComment? TrailingComment = null
+    );
 
-    private ParsedScalar BeginScalar(bool quoted) => new(_scalars.Length, quoted);
-
-    private uint CommitScalar(DTokenVariant variant, ParsedScalar scalar)
+    private ParsedScalar BeginScalar(bool quoted, TrailingComment? trailingComment = null)
     {
-        var length = _scalars.Length - scalar.Start;
+        return new(_utf8TextForTokens.Length, quoted, trailingComment);
+    }
+
+    private TrailingComment StoreTrailingComment(ReadOnlySpan<byte> comment)
+    {
+        // Parsing releases the input buffer, so comments share the document-owned scalar buffer.
+        var offset = _utf8TextForTokens.Length;
+
+        _utf8TextForTokens.Append(comment);
+
+        return new(offset, comment.Length);
+    }
+
+    private uint CreateTokenForParsedScalar(DTokenVariant variant, ParsedScalar scalar)
+    {
+        var length = _utf8TextForTokens.Length - scalar.Start;
         if (length > 0x1ffffff)
         {
             ThrowParseError(ParseException.ErrorCode.InvalidString);
         }
 
-        return AllocToken(
+        var tokenId = AllocToken(
             DToken.Make(variant, DToken.EncodeLengthOffsetPayload(length, scalar.Start))
         );
+
+        if (scalar.TrailingComment is { } trailingComment)
+        {
+            _trailingCommentsByNodeId.Add(tokenId, trailingComment);
+        }
+
+        return tokenId;
     }
 
-    private uint StoreScalar(DTokenVariant variant, ReadOnlySpan<byte> text)
+    private uint CreateTriviaTokenFromUtf8Text(DTokenVariant variant, ReadOnlySpan<byte> text)
     {
-        var scalar = BeginScalar(false);
+        var scalar = BeginScalar(quoted: false);
 
-        _scalars.Append(text);
+        _utf8TextForTokens.Append(text);
 
-        return CommitScalar(variant, scalar);
+        return CreateTokenForParsedScalar(variant, scalar);
     }
 
-    /// <summary>
-    /// Scalar readers use this span immediately; they must not retain it across scalar buffer growth.
-    /// </summary>
-    private ReadOnlySpan<byte> GetStoredScalarBytes(DToken token)
+    /// <remarks>
+    /// Scalar readers must use this span before internal buffer growth.
+    /// </remarks>
+    private ReadOnlySpan<byte> GetUtf8TextForToken(DToken token)
     {
         var (length, offset) = DToken.DecodeLengthOffsetPayload(token);
 
-        return _scalars.Slice(offset, length);
+        return _utf8TextForTokens.Slice(offset, length);
     }
 
     private void CompleteContainer(uint containerId)
@@ -690,9 +804,6 @@ public sealed partial class YamlDocument : Document
         SetToken(containerId, token);
     }
 
-    private static bool IsLineEnd(byte value) =>
-        value is YamlSyntax.CarriageReturn or YamlSyntax.LineFeed;
-
     private bool IsDocumentMarkerAt(int position) =>
         IsMarkerAtPosition(position, YamlSyntax.DocumentStartUtf8)
         || IsMarkerAtPosition(position, YamlSyntax.DocumentEndUtf8);
@@ -703,44 +814,31 @@ public sealed partial class YamlDocument : Document
         var source = Source;
 
         return source[position..].StartsWith(marker)
-            && (
-                position + marker.Length == source.Length
-                || IsLineEnd(source[position + marker.Length])
-                || source[position + marker.Length] is YamlSyntax.Space or YamlSyntax.Tab
-            );
+               && (
+                   position + marker.Length == source.Length
+                   || YamlSyntax.IsWhiteSpaceOrLineEnd(source[position + marker.Length])
+               );
     }
 
-    private static void Write(Utf8TextWriter writer, in DataReader reader, YamlWriteOptions options)
+    private static void Write(
+        Utf8TextWriter writer,
+        in DataReader reader,
+        in YamlWriteOptions options
+    )
     {
-        WriteTrivia(writer, reader, reader.RootId, options, false);
+        WriteTrivia(writer, reader, reader.RootId, options, separatorWritten: false);
 
-        var endsWithBlockScalar = WriteNode(writer, reader, reader.RootId, options, 0, false);
-
-        // The comment ending the last line has no following token inside the value,
-        // so it was kept in the document's trailing trivia.
-        var document = options.PreserveTrivia ? reader.Document as YamlDocument : null;
-        var whitespaceId = 0U;
-        var commentId = 0U;
-        var inlineComment =
-            document != null
-            && TryGetInlineComment(
-                reader,
-                document._trailingTrivia,
-                out whitespaceId,
-                out commentId
-            );
-
-        if (inlineComment && !endsWithBlockScalar)
-        {
-            WriteInlineCommentText(writer, reader, whitespaceId, commentId);
-        }
+        WriteNode(
+            writer,
+            reader,
+            reader.RootId,
+            reader.GetToken(reader.RootId),
+            options,
+            depth: 0,
+            isKey: false
+        );
 
         writer.WriteNewLine();
-
-        if (document != null)
-        {
-            WriteTrailingTrivia(writer, reader, document._trailingTrivia, inlineComment);
-        }
     }
 
     internal static void WriteCollectionIndicator(Utf8TextWriter writer, bool mapValue)
@@ -769,7 +867,7 @@ public sealed partial class YamlDocument : Document
     {
         if (afterIndicator)
         {
-            WriteValueSeparator(writer, false);
+            WriteValueSeparator(writer, blockValue: false);
         }
 
         writer.WriteString(isMap ? YamlSyntax.EmptyMappingUtf8 : YamlSyntax.EmptySequenceUtf8);
@@ -779,51 +877,62 @@ public sealed partial class YamlDocument : Document
         Utf8TextWriter writer,
         in DataReader reader,
         uint tokenId,
-        YamlWriteOptions options,
+        DToken token,
+        in YamlWriteOptions options,
         int depth,
-        bool key,
+        bool isKey,
         uint followingTokenId = 0
     )
     {
-        var token = reader.GetToken(tokenId);
+        // Container writers already read the token to choose its layout, so reuse it through scalar writers too.
         if (token.Type == DTokenType.Array)
         {
-            return WriteArray(writer, reader, tokenId, options, depth, followingTokenId);
+            var endsWithBlockScalar = WriteArray(
+                writer,
+                reader,
+                tokenId,
+                options,
+                depth,
+                followingTokenId
+            );
+
+            if (!isKey && options.PreserveTrivia)
+            {
+                writer.WriteString(GetAttachedTrailingComment(reader, tokenId, options));
+            }
+
+            return endsWithBlockScalar;
         }
 
         if (token.Type == DTokenType.Map)
         {
-            return WriteMap(writer, reader, tokenId, options, depth, followingTokenId);
+            var endsWithBlockScalar = WriteMap(
+                writer,
+                reader,
+                tokenId,
+                options,
+                depth,
+                followingTokenId
+            );
+
+            if (!isKey && options.PreserveTrivia)
+            {
+                writer.WriteString(GetAttachedTrailingComment(reader, tokenId, options));
+            }
+
+            return endsWithBlockScalar;
         }
 
         var blockScalar =
-            !key
+            !isKey
             && options.StringStyle == YamlStringStyle.Multiline
             && token.Kind is DTokenKind.String or DTokenKind.Symbol or DTokenKind.ByteString;
 
-        var whitespaceId = 0U;
-        var commentId = 0U;
-        if (blockScalar && options.PreserveTrivia)
-        {
-            // A trailing comment belongs on the block header, never on a content line. Pass the next
-            // token through containers so their last descendant can consume its comment exactly once.
-            if (followingTokenId != 0)
-            {
-                TryGetInlineComment(reader, followingTokenId, out whitespaceId, out commentId);
-            }
-            else if (reader.Document is YamlDocument document)
-            {
-                TryGetInlineComment(
-                    reader,
-                    document._trailingTrivia,
-                    out whitespaceId,
-                    out commentId
-                );
-            }
-        }
-
-        var commentWhitespace = whitespaceId == 0 ? default : reader.ReadTrivia(whitespaceId);
-        var commentText = commentId == 0 ? default : reader.ReadTrivia(commentId);
+        // Most writes omit trivia.
+        var trailingComment =
+            !isKey && options.PreserveTrivia
+                ? GetAttachedTrailingComment(reader, tokenId, options)
+                : default;
 
         switch (token.Kind)
         {
@@ -841,25 +950,34 @@ public sealed partial class YamlDocument : Document
             case DTokenKind.Float:
             case DTokenKind.InlineFloat:
             case DTokenKind.BigNumber:
-                WriteNumber(writer, reader, tokenId);
+                WriteNumber(writer, reader, tokenId, token);
 
                 break;
 
             case DTokenKind.Timestamp:
-                WriteTimestamp(writer, reader, tokenId);
+                WriteTimestamp(writer, reader, tokenId, token);
 
                 break;
 
             case DTokenKind.String:
             case DTokenKind.Symbol:
+                // An original YAML scalar already points into this document's UTF-8 buffer.
+                // Reading it through DataReader would look up the same token again for every key and value.
+                var sourceYamlDocument = reader.Document as YamlDocument;
+                var hasStoredUtf8 = sourceYamlDocument != null && !token.IsExtended;
+                var utf8String = hasStoredUtf8
+                    ? sourceYamlDocument!.GetUtf8TextForToken(token)
+                    : reader.ReadUtf8String(tokenId);
+
                 WriteStringValue(
                     writer,
-                    reader.ReadUtf8String(tokenId),
+                    utf8String,
                     options,
                     depth,
-                    key,
-                    commentWhitespace,
-                    commentText
+                    isKey,
+                    default,
+                    blockScalar ? trailingComment : default,
+                    alreadyValidatedUtf8: hasStoredUtf8
                 );
 
                 break;
@@ -869,11 +987,12 @@ public sealed partial class YamlDocument : Document
                     writer,
                     reader,
                     tokenId,
+                    token,
                     options,
                     depth,
-                    key,
-                    commentWhitespace,
-                    commentText
+                    isKey,
+                    default,
+                    blockScalar ? trailingComment : default
                 );
 
                 break;
@@ -885,6 +1004,11 @@ public sealed partial class YamlDocument : Document
                 );
 
                 break;
+        }
+
+        if (!blockScalar && !isKey)
+        {
+            writer.WriteString(trailingComment);
         }
 
         return blockScalar;

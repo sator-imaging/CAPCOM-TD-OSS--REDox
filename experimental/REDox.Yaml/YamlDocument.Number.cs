@@ -1,7 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-using System;
+﻿using System;
 using System.Buffers.Text;
 using System.Diagnostics;
 using System.Globalization;
@@ -13,27 +10,136 @@ namespace REDox.Yaml;
 
 public sealed partial class YamlDocument
 {
+    /// <inheritdoc />
+    protected override long DecodeInteger(DToken token)
+    {
+        var bytes = GetUtf8TextForToken(token);
+        if (bytes.Contains(YamlSyntax.Underscore))
+        {
+            // The separators were validated when the scalar was read
+            var size = bytes.Length;
+            Span<byte> cleaned = size <= StackLimit ? stackalloc byte[size] : default;
+
+            using var buffer = ImmediateBuffer<byte>.Using(size, ref cleaned);
+
+            var valid = TryRemoveDigitSeparators(bytes, cleaned, out var length);
+
+            Debug.Assert(valid);
+
+            return DecodeIntegerScalarBytes(cleaned[..length]);
+        }
+
+        return DecodeIntegerScalarBytes(bytes);
+    }
+
+    private long DecodeIntegerScalarBytes(ReadOnlySpan<byte> bytes)
+    {
+        return Utf8Parser.TryParse(bytes, out long value, out var consumed)
+               && consumed == bytes.Length
+            ? value
+            : Utf8Parser.TryParse(bytes, out ulong unsigned, out consumed)
+              && consumed == bytes.Length
+                ? unchecked((long)unsigned)
+                : TryParsePrefixedInteger(bytes, out var prefixed)
+                    ? unchecked((long)prefixed)
+                    : throw ParseError(
+                        ParseException.ErrorCode.InvalidFormat,
+                        "The stored integer cannot be decoded."
+                    );
+    }
+
+    /// <inheritdoc />
+    protected override double DecodeFloat(DToken token)
+    {
+        var bytes = GetUtf8TextForToken(token);
+        if (bytes.Contains(YamlSyntax.Underscore))
+        {
+            var size = bytes.Length;
+            Span<byte> cleaned = size <= StackLimit ? stackalloc byte[size] : default;
+
+            using var buffer = ImmediateBuffer<byte>.Using(size, ref cleaned);
+
+            var valid = TryRemoveDigitSeparators(bytes, cleaned, out var length);
+
+            Debug.Assert(valid);
+
+            return DecodeFloatScalarBytes(cleaned[..length]);
+        }
+
+        return DecodeFloatScalarBytes(bytes);
+    }
+
+    private static double DecodeFloatScalarBytes(ReadOnlySpan<byte> bytes)
+    {
+        return bytes.StartsWith(YamlSyntax.NegativeInfinityPrefixUtf8)
+               && bytes.Length >= YamlSyntax.InfinitySuffixUtf8.Length
+               && Ascii.EqualsIgnoreCase(
+                   bytes[^YamlSyntax.InfinitySuffixUtf8.Length..],
+                   YamlSyntax.InfinitySuffixUtf8
+               )
+            ? double.NegativeInfinity
+            : bytes.Length >= YamlSyntax.PositiveInfinitySuffixUtf8.Length
+              && Ascii.EqualsIgnoreCase(
+                  bytes[^YamlSyntax.PositiveInfinitySuffixUtf8.Length..],
+                  YamlSyntax.PositiveInfinitySuffixUtf8
+              )
+                ? double.PositiveInfinity
+                : bytes.Length >= YamlSyntax.NotANumberSuffixUtf8.Length
+                  && Ascii.EqualsIgnoreCase(
+                      bytes[^YamlSyntax.NotANumberSuffixUtf8.Length..],
+                      YamlSyntax.NotANumberSuffixUtf8
+                  )
+                    ? double.NaN
+                    : double.Parse(bytes, CultureInfo.InvariantCulture);
+    }
+
+    /// <inheritdoc />
+    protected override ReadOnlySpan<byte> DecodeBigNumber(DToken token)
+    {
+        var bytes = GetUtf8TextForToken(token);
+
+        if (bytes.Contains(YamlSyntax.Underscore))
+        {
+            return RemoveUnderscores(bytes);
+
+            static ReadOnlySpan<byte> RemoveUnderscores(ReadOnlySpan<byte> bytes)
+            {
+                // TODO: eliminate array allocation (if possible).
+                var cleaned = new byte[bytes.Length - bytes.Count(YamlSyntax.Underscore)];
+                var valid = TryRemoveDigitSeparators(bytes, cleaned, out var length);
+
+                Debug.Assert(valid && length == cleaned.Length);
+
+                return cleaned;
+            }
+        }
+        else
+        {
+            return bytes;
+        }
+    }
+
     // Reads a hexadecimal ("0x1F"), octal ("0o14") or binary ("0b101") integer.
     // A text without digits, with a digit outside the base, or too large for 64 bits is not one.
     private static bool TryParsePrefixedInteger(ReadOnlySpan<byte> text, out ulong value)
     {
         value = 0;
 
-        int radix;
+        int shift;
         ReadOnlySpan<byte> digits;
         if (text.StartsWith(YamlSyntax.BinaryPrefixUtf8))
         {
-            radix = 2;
+            shift = 1;
             digits = text[YamlSyntax.BinaryPrefixUtf8.Length..];
         }
         else if (text.StartsWith(YamlSyntax.HexPrefixUtf8))
         {
-            radix = 16;
+            shift = 4;
             digits = text[YamlSyntax.HexPrefixUtf8.Length..];
         }
         else if (text.StartsWith(YamlSyntax.OctalPrefixUtf8))
         {
-            radix = 8;
+            shift = 3;
             digits = text[YamlSyntax.OctalPrefixUtf8.Length..];
         }
         else
@@ -59,32 +165,35 @@ public sealed partial class YamlDocument
                     character <= YamlSyntax.HexDigitUpperLast
                         ? character - YamlSyntax.HexDigitUpperFirst + YamlSyntax.HexLetterDigitValue
                         : character
-                            - YamlSyntax.HexDigitLowerFirst
-                            + YamlSyntax.HexLetterDigitValue;
+                          - YamlSyntax.HexDigitLowerFirst
+                          + YamlSyntax.HexLetterDigitValue;
             }
             else
             {
                 return false;
             }
 
-            if (digit >= radix || value > (ulong.MaxValue - (ulong)digit) / (ulong)radix)
+            // These bases are powers of two, so shifting preserves the overflow check without division.
+            if (digit >= (1 << shift) || value > (ulong.MaxValue >> shift))
             {
                 return false;
             }
 
-            value = value * (ulong)radix + (ulong)digit;
+            value = (value << shift) + (uint)digit;
         }
 
         return true;
     }
 
-    // The single source of truth for "does this plain text read as a number".
+    // The single source of truth for "does this plain text read as a number?".
     // Shared by parsing and by YamlStringHelper (which must quote strings that would otherwise be read back as numbers).
     internal static bool TryGetNumberVariant(ReadOnlySpan<byte> text, out DTokenVariant variant)
     {
         variant = default;
 
-        if (text.IsEmpty)
+        // Ordinary strings cannot be numbers, so avoid several numeric parsers on each YAML key and value.
+        // This also keeps Infinity and NaN as strings: YAML accepts only their dot-prefixed spellings.
+        if (text.IsEmpty || !StartsLikeDecimalNumber(text))
         {
             return false;
         }
@@ -101,7 +210,11 @@ public sealed partial class YamlDocument
             return true;
         }
 
-        if (TryParsePrefixedInteger(text, out var prefixed))
+        if (
+            text.Length > 2
+            && text[0] == YamlSyntax.DigitZero
+            && TryParsePrefixedInteger(text, out var prefixed)
+        )
         {
             variant =
                 prefixed <= long.MaxValue ? DTokenVariant.Integer : DTokenVariant.IntegerUnsigned;
@@ -126,9 +239,12 @@ public sealed partial class YamlDocument
             return true;
         }
 
-        // BigInteger requires UTF-16; keep the string conversion local to this check.
+        // BigInteger requires UTF-16. A digit-prefixed string such as "30s" cannot be an integer,
+        // so exclude non-digits before allocating its UTF-16 copy.
+        var digitStart = text[0] is YamlSyntax.Plus or YamlSyntax.Dash ? 1 : 0;
         if (
-            BigInteger.TryParse(
+            !text[digitStart..].ContainsAnyExceptInRange(YamlSyntax.DigitZero, YamlSyntax.DigitNine)
+            && BigInteger.TryParse(
                 Encoding.UTF8.GetString(text),
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
@@ -141,12 +257,6 @@ public sealed partial class YamlDocument
             return true;
         }
 
-        // The parsers below also read the words "Infinity" and "NaN", which YAML does not: it has ".inf" and ".nan".
-        if (!StartsLikeDecimalNumber(text))
-        {
-            return false;
-        }
-
         if (Utf8Parser.TryParse(text, out double floating, out consumed) && consumed == text.Length)
         {
             variant = DTokenVariant.Float;
@@ -155,8 +265,9 @@ public sealed partial class YamlDocument
         }
 
         if (
-            double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
-            && text.ContainsAny(YamlSyntax.Exponent)
+            // This fallback only accepts exponent forms; check that before the more expensive parser.
+            text.ContainsAny(YamlSyntax.Exponent)
+            && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out _)
         )
         {
             variant = DTokenVariant.BigNumberFloat;
@@ -172,27 +283,24 @@ public sealed partial class YamlDocument
         var index = text[0] is YamlSyntax.Plus or YamlSyntax.Dash ? 1 : 0;
 
         return index < text.Length
-            && (YamlSyntax.IsAsciiDigit(text[index]) || text[index] == YamlSyntax.Dot);
+               && (YamlSyntax.IsAsciiDigit(text[index]) || text[index] == YamlSyntax.Dot);
     }
 
-    // The longest text that is checked on the stack.
-    // A longer one, which a number with underscores hardly is, gets an array.
-    private const int StackLimit = 128;
-
-    // YAML 1.1 allows underscores between the digits of a number ("1_000", "0x1_0", "1_000.5"). They are for reading
-    // only: the text is a number when it is one without them, and the value does not have them.
+    // YAML 1.1 allows underscores between the digits of a number ("1_000", "0x1_0", "1_000.5").
     private static bool TryGetNumberVariantWithDigitSeparators(
         ReadOnlySpan<byte> text,
         out DTokenVariant variant
     )
     {
+        int size = text.Length;
+        var cleaned = size <= StackLimit ? stackalloc byte[size] : default;
+
+        using var _ = ImmediateBuffer<byte>.Using(size, ref cleaned);
+
         variant = default;
 
-        var cleaned =
-            text.Length <= StackLimit ? stackalloc byte[StackLimit] : new byte[text.Length];
-
         return TryRemoveDigitSeparators(text, cleaned, out var length)
-            && TryGetNumberVariant(cleaned[..length], out variant);
+               && TryGetNumberVariant(cleaned[..length], out variant);
     }
 
     // Copies the text without its underscores.
@@ -217,8 +325,8 @@ public sealed partial class YamlDocument
                     exponent
                     || index == 0
                     || index + 1 == text.Length
-                    || !IsDigit(text[index + 1], hexadecimal)
-                    || !IsDigit(text[index - 1], hexadecimal)
+                    || !YamlSyntax.IsDigit(text[index + 1], hexadecimal)
+                    || !YamlSyntax.IsDigit(text[index - 1], hexadecimal)
                 )
                 {
                     return false;
@@ -238,107 +346,32 @@ public sealed partial class YamlDocument
         return true;
     }
 
-    private static bool IsDigit(byte value, bool hexadecimal) =>
-        hexadecimal ? YamlSyntax.IsAsciiHexDigit(value) : YamlSyntax.IsAsciiDigit(value);
-
-    // The text of a number that was read with underscores, without them. It was checked when it was read.
-    private static byte[] RemoveDigitSeparators(ReadOnlySpan<byte> text)
-    {
-        var cleaned = new byte[text.Length];
-        var valid = TryRemoveDigitSeparators(text, cleaned, out var length);
-
-        Debug.Assert(valid);
-
-        return cleaned[..length];
-    }
-
     private bool TryParseNumber(ParsedScalar scalar, out uint tokenId)
     {
         tokenId = 0;
 
-        if (!TryGetNumberVariant(_scalars.GetWrittenSpanFromOffset(scalar.Start), out var variant))
+        if (
+            !TryGetNumberVariant(
+                _utf8TextForTokens.GetWrittenSpanFromOffset(scalar.Start),
+                out var variant
+            )
+        )
         {
             return false;
         }
 
-        tokenId = CommitScalar(variant, scalar);
+        tokenId = CreateTokenForParsedScalar(variant, scalar);
 
         return true;
     }
 
-    /// <inheritdoc />
-    protected override long DecodeInteger(DToken token)
+    private static void WriteNumber(
+        Utf8TextWriter writer,
+        in DataReader reader,
+        uint tokenId,
+        DToken token
+    )
     {
-        var bytes = GetStoredScalarBytes(token);
-        if (bytes.Contains(YamlSyntax.Underscore))
-        {
-            bytes = RemoveDigitSeparators(bytes);
-        }
-
-        return Utf8Parser.TryParse(bytes, out long value, out var consumed)
-            && consumed == bytes.Length
-                ? value
-            : Utf8Parser.TryParse(bytes, out ulong unsigned, out consumed)
-            && consumed == bytes.Length
-                ? unchecked((long)unsigned)
-            : TryParsePrefixedInteger(bytes, out var prefixed) ? unchecked((long)prefixed)
-            : throw ParseError(
-                ParseException.ErrorCode.InvalidFormat,
-                "The stored integer cannot be decoded."
-            );
-    }
-
-    /// <inheritdoc />
-    protected override double DecodeFloat(DToken token)
-    {
-        var bytes = GetStoredScalarBytes(token);
-        if (bytes.Contains(YamlSyntax.Underscore))
-        {
-            bytes = RemoveDigitSeparators(bytes);
-        }
-
-        return bytes.StartsWith(YamlSyntax.NegativeInfinityPrefixUtf8)
-            && bytes.Length >= YamlSyntax.InfinitySuffixUtf8.Length
-            && Ascii.EqualsIgnoreCase(
-                bytes[^YamlSyntax.InfinitySuffixUtf8.Length..],
-                YamlSyntax.InfinitySuffixUtf8
-            )
-                ? double.NegativeInfinity
-            : bytes.Length >= YamlSyntax.PositiveInfinitySuffixUtf8.Length
-            && Ascii.EqualsIgnoreCase(
-                bytes[^YamlSyntax.PositiveInfinitySuffixUtf8.Length..],
-                YamlSyntax.PositiveInfinitySuffixUtf8
-            )
-                ? double.PositiveInfinity
-            : bytes.Length >= YamlSyntax.NotANumberSuffixUtf8.Length
-            && Ascii.EqualsIgnoreCase(
-                bytes[^YamlSyntax.NotANumberSuffixUtf8.Length..],
-                YamlSyntax.NotANumberSuffixUtf8
-            )
-                ? double.NaN
-            : double.Parse(bytes, CultureInfo.InvariantCulture);
-    }
-
-    /// <inheritdoc />
-    protected override ReadOnlySpan<byte> DecodeBigNumber(DToken token)
-    {
-        var bytes = GetStoredScalarBytes(token);
-
-        return bytes.Contains(YamlSyntax.Underscore)
-            ? (ReadOnlySpan<byte>)RemoveDigitSeparators(bytes)
-            : bytes;
-    }
-
-    private static void WriteNumber(Utf8TextWriter writer, in DataReader reader, uint tokenId)
-    {
-        var token = reader.GetToken(tokenId);
-        if (token.Kind == DTokenKind.BigNumber)
-        {
-            writer.WriteString(reader.ReadBigNumber(tokenId));
-
-            return;
-        }
-
         if (token.Kind == DTokenKind.Integer)
         {
             if (token.Variant == DTokenVariant.IntegerUnsigned)
@@ -349,6 +382,10 @@ public sealed partial class YamlDocument
             {
                 writer.WriteInt64(reader.ReadInt64(tokenId));
             }
+        }
+        else if (token.Kind == DTokenKind.BigNumber)
+        {
+            writer.WriteString(reader.ReadBigNumber(tokenId));
         }
         else
         {

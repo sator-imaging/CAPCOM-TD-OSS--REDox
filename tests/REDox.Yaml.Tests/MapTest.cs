@@ -1,11 +1,11 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Linq;
 using REDox.Json;
 using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace REDox.Yaml.Tests;
 
-public sealed class YamlMapTest
+public sealed class MapTest
 {
     [Theory]
     [InlineData("{}")]
@@ -26,7 +26,7 @@ public sealed class YamlMapTest
     [Theory]
     [InlineData("{a: 1, b: true}")]
     [InlineData("a: 1\nb: true\n")]
-    public void SimpleMap_ParsesAndRoundTrips(string yaml)
+    public void MapWithIntegerAndBooleanValuesInBlockOrFlowStyle_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -61,12 +61,12 @@ public sealed class YamlMapTest
         string expectedJson
     )
     {
-        YamlTestHelper.AssertYamlParsesAsJsonValueAndRoundTrips(yaml, expectedJson);
+        YamlTestFixture.Assert_YamlMatchesJsonValue_YamlRoundTrips(yaml, expectedJson);
     }
 
     [Theory]
     [InlineData("a:\n  b: 1\n")]
-    public void NestedMap_ParsesAndRoundTrips(string yaml)
+    public void NestedBlockMapsWithIntegerLeaf_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -84,7 +84,7 @@ public sealed class YamlMapTest
 
     [Theory]
     [InlineData("a:\n  - 1\n  - 2\n")]
-    public void MapWithArray_ParsesAndRoundTrips(string yaml)
+    public void BlockMapWithTwoIntegerSequence_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -102,7 +102,7 @@ public sealed class YamlMapTest
         );
     }
 
-    // Only what a DElement can hold is a key:
+    // Only what a DElement can hold is a key by YAML:
     //   null
     //   boolean
     //   number
@@ -174,7 +174,7 @@ public sealed class YamlMapTest
     [InlineData("\"1\": a\n\"true\": b\n\"2001-12-14\": c\n\"1.5\": d\n")]
     [InlineData("1: a\n\"1\": b\n")]
     [InlineData("null: a\ntext: b\n")]
-    public void MapKeyTypes_SurviveWritingAndReading(string yaml)
+    public void MapKeyTypes_WriteWithOriginalYamlSpelling(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -187,7 +187,7 @@ public sealed class YamlMapTest
     }
 
     [Fact]
-    public void MapWithNonStringKeys_WritesAndReadsBack()
+    public void MapWithNonStringKeys_WritesAndParsesWithSameKeyTypes()
     {
         var map = new DMap
         {
@@ -218,14 +218,17 @@ public sealed class YamlMapTest
     [Fact]
     public void KeyValidation_DistinguishesKeyTypes()
     {
-        var validating = new YamlDocumentOptions { EnableValueValidation = true };
+        var optionWithValidateEnabled = new YamlDocumentOptions { EnableValueValidation = true };
 
-        using var different = YamlDocument.Parse("1: a\n\"1\": b\n", options: validating);
+        using var integerAndStringKey = YamlDocument.Parse(
+            "1: a\n\"1\": b\n",
+            options: optionWithValidateEnabled
+        );
 
-        Assert.Equal(2, different.RootElement.AsMap().Count);
+        Assert.Equal(2, integerAndStringKey.RootElement.AsMap().Count);
 
-        YamlTestHelper.AssertYamlParseError(
-            () => YamlDocument.Parse("1: a\n1: b\n", options: validating),
+        YamlTestFixture.AssertYamlParseError(
+            () => YamlDocument.Parse("1: a\n1: b\n", options: optionWithValidateEnabled),
             "DuplicateKey"
         );
     }
@@ -235,7 +238,7 @@ public sealed class YamlMapTest
     [InlineData("{11: a, 0xB: b}")]
     public void EquivalentIntegerKeySpellings_ValidationRejectsDuplicates(string yaml)
     {
-        YamlTestHelper.AssertYamlParseError(
+        YamlTestFixture.AssertYamlParseError(
             () =>
                 YamlDocument.Parse(
                     yaml,
@@ -264,7 +267,10 @@ public sealed class YamlMapTest
     [InlineData("[\n? foo\n bar : baz\n]", "[{\"foo bar\":\"baz\"}]")]
     [InlineData("{? a : b, ? c}", "{\"a\":\"b\",\"c\":null}")]
     [InlineData("?\n: b\n", "{\"null\":\"b\"}")]
-    public void ExplicitKey_ReadsLikeImplicitKey(string yaml, string expectedJson)
+    public void ExplicitKey_ParsesExpectedMapWhenKeysComparedAsText(
+        string yaml,
+        string expectedJson
+    )
     {
         using var parsedYamlDocument = YamlDocument.Parse(yaml);
         using var expectedJsonDocument = JsonDocument.Parse(expectedJson);
@@ -274,51 +280,51 @@ public sealed class YamlMapTest
             JsonDocument.EncodeToString(expectedJsonDocument.RootElement),
             EncodeAsJsonWithTextKeys(parsedYamlDocument.RootElement)
         );
-    }
 
-    private static string EncodeAsJsonWithTextKeys(DElement element)
-    {
-        return element.Token.Type switch
+        static string EncodeAsJsonWithTextKeys(DElement element)
         {
-            DTokenType.Map => "{"
-                + string.Join(
-                    ",",
-                    element
-                        .AsMap()
-                        .Select(pair =>
-                            JsonSerializer.Serialize(GetKeyText(pair.Key.AsElement()))
-                            + ":"
-                            + EncodeAsJsonWithTextKeys(pair.Value.AsElement())
-                        )
-                )
-                + "}",
-            DTokenType.Array => "["
-                + string.Join(
-                    ",",
-                    element.AsArray().Select(item => EncodeAsJsonWithTextKeys(item.AsElement()))
-                )
-                + "]",
-            _ => JsonDocument.EncodeToString(element),
-        };
-    }
-
-    private static string GetKeyText(DElement key)
-    {
-        if (key.Token.Kind == DTokenKind.Null)
-        {
-            return "null";
+            return element.Token.Type switch
+            {
+                DTokenType.Map => "{"
+                                  + string.Join(
+                                      ",",
+                                      element
+                                          .AsMap()
+                                          .Select(pair =>
+                                              JsonSerializer.Serialize(GetKeyText(pair.Key.AsElement()))
+                                              + ":"
+                                              + EncodeAsJsonWithTextKeys(pair.Value.AsElement())
+                                          )
+                                  )
+                                  + "}",
+                DTokenType.Array => "["
+                                    + string.Join(
+                                        ",",
+                                        element.AsArray().Select(item => EncodeAsJsonWithTextKeys(item.AsElement()))
+                                    )
+                                    + "]",
+                _ => JsonDocument.EncodeToString(element),
+            };
         }
 
-        if (key.Token.Kind != DTokenKind.String)
+        static string GetKeyText(DElement key)
         {
-            return JsonDocument.EncodeToString(key);
+            if (key.Token.Kind == DTokenKind.Null)
+            {
+                return "null";
+            }
+
+            if (key.Token.Kind != DTokenKind.String)
+            {
+                return JsonDocument.EncodeToString(key);
+            }
+
+            var text = key.GetString();
+
+            Debug.Assert(text != null);
+
+            return text;
         }
-
-        var text = key.GetString();
-
-        Debug.Assert(text != null); // GetString returns null only for a null token, which is handled above.
-
-        return text;
     }
 
     [Theory]

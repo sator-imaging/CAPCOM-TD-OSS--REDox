@@ -4,13 +4,14 @@ using REDox.MessagePack;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlFormatConversionTest
+public sealed partial class FormatCompatibilityTest
 {
-    // Binary data (a CBOR byte string, a MessagePack bin) has no YAML form (the !!binary tag is not supported): it is
-    // written as its Base64 text, alone or inside a collection, and reads back as a string.
+    // Binary data (a CBOR byte string, a MessagePack bin) has no YAML form (the !!binary tag is not supported).
+    // These are written as its Base64 text, alone or inside a collection, and reads back as a string.
     private static readonly byte[] CborByteString = [0x43, 0x01, 0x02, 0x03];
     private static readonly byte[] MessagePackBin = [0xc4, 0x03, 0x01, 0x02, 0x03];
     private static readonly byte[] CborArrayOfByteString = [0x82, 0x01, 0x43, 0x01, 0x02, 0x03];
+
     private static readonly byte[] MessagePackArrayOfBin =
     [
         0x92,
@@ -22,14 +23,17 @@ public sealed partial class YamlFormatConversionTest
         0x03,
     ];
 
-    private static readonly YamlWriteOptions LineFeedOptions = new() { NewLine = "\n" };
+    private static readonly YamlWriteOptions LineFeedYamlWriteOptions = new() { NewLine = "\n" };
 
     [Fact]
-    public void CborByteStringToYaml_WritesString()
+    public void CborByteStringToYaml_WritesAndReadsBackAsBase64String()
     {
         using var cborDocument = CborDocument.Parse(CborByteString);
 
-        var yamlFromCbor = YamlDocument.EncodeToString(cborDocument.RootElement, LineFeedOptions);
+        var yamlFromCbor = YamlDocument.EncodeToString(
+            cborDocument.RootElement,
+            LineFeedYamlWriteOptions
+        );
 
         using var convertedYamlDocument = YamlDocument.Parse(yamlFromCbor);
 
@@ -40,13 +44,13 @@ public sealed partial class YamlFormatConversionTest
     }
 
     [Fact]
-    public void MessagePackBinaryValueToYaml_WritesString()
+    public void MessagePackBinaryValueToYaml_WritesAndReadsBackAsBase64String()
     {
         using var messagePackDocument = MessagePackDocument.Parse(MessagePackBin);
 
         var yamlFromMessagePack = YamlDocument.EncodeToString(
             messagePackDocument.RootElement,
-            LineFeedOptions
+            LineFeedYamlWriteOptions
         );
 
         using var convertedYamlDocument = YamlDocument.Parse(yamlFromMessagePack);
@@ -58,17 +62,17 @@ public sealed partial class YamlFormatConversionTest
     }
 
     [Fact]
-    public void BinaryValueInsideCollectionToYaml_WritesString()
+    public void BinaryValueInsideCollectionToYaml_WritesAndReadsBackAsBase64String()
     {
         using var cborDocument = CborDocument.Parse(CborArrayOfByteString);
         using var messagePackDocument = MessagePackDocument.Parse(MessagePackArrayOfBin);
 
         using var yamlFromCborDocument = YamlDocument.Parse(
-            YamlDocument.EncodeToString(cborDocument.RootElement, LineFeedOptions)
+            YamlDocument.EncodeToString(cborDocument.RootElement, LineFeedYamlWriteOptions)
         );
 
         using var yamlFromMessagePackDocument = YamlDocument.Parse(
-            YamlDocument.EncodeToString(messagePackDocument.RootElement, LineFeedOptions)
+            YamlDocument.EncodeToString(messagePackDocument.RootElement, LineFeedYamlWriteOptions)
         );
 
         var expectedYamlArray = new DArray(1, "AQID");
@@ -116,6 +120,8 @@ public sealed partial class YamlFormatConversionTest
             yamlWithUtcTimeZone.RootElement.AsArray()[0].AsElement().Token.Kind
         );
 
+        Assert.Equal(540, yamlWithUtcTimeZone.RootElement.AsArray()[1].AsElement().GetInt64());
+
         var yamlDateTimeUtc = yamlWithUtcTimeZone
             .RootElement.AsArray()[0]
             .AsElement()
@@ -137,12 +143,11 @@ public sealed partial class YamlFormatConversionTest
         Assert.Equal(value, yamlDateTimeTokyo);
         Assert.Equal(value.DateTime, yamlDateTimeTokyo.DateTime);
         Assert.Equal(540, yamlDateTimeTokyo.Offset.TotalMinutes);
-        Assert.Equal(540, yamlWithUtcTimeZone.RootElement.AsArray()[1].AsElement().GetInt64());
     }
 
     // CBOR's "undefined" (0xf7) has no YAML form of its own: it is a null.
     [Fact]
-    public void CborUndefinedToYaml_WritesNull()
+    public void CborUndefinedToYaml_WritesAndReadsBackAsNull()
     {
         using var cborDocument = CborDocument.Parse([0xf7]);
 

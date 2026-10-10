@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -46,7 +46,8 @@ public class YamlSerialize<T, U>
     {
         get
         {
-            Debug.Assert(_root != null); // Setup sets it before any benchmark runs.
+            Debug.Assert(_root != null);
+
             return _root;
         }
     }
@@ -55,6 +56,6 @@ public class YamlSerialize<T, U>
     [BenchmarkCategory(nameof(REDox))]
     public byte[] REDoxYamlSerialize()
     {
-        return YamlSerializer.Serialize<U>(Root, SerializerSettings.Default);
+        return YamlSerializer.Serialize(Root, SerializerSettings.Default);
     }
 }

@@ -1,6 +1,6 @@
-namespace REDox.Yaml.Tests;
+﻿namespace REDox.Yaml.Tests;
 
-public sealed class YamlArrayTest
+public sealed class ArrayTest
 {
     [Theory]
     [InlineData("[]")]
@@ -20,7 +20,7 @@ public sealed class YamlArrayTest
 
     [Theory]
     [InlineData("[1, true, null]")]
-    public void MixedArray_ParsesAndRoundTrips(string yaml)
+    public void FlowArrayWithIntegerBooleanAndNull_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -39,7 +39,7 @@ public sealed class YamlArrayTest
 
     [Theory]
     [InlineData("- 1\n- 2\n")]
-    public void BlockArray_ParsesAndRoundTrips(string yaml)
+    public void BlockArrayWithTwoIntegers_ParsesAndRoundTrips(string yaml)
     {
         using var document = YamlDocument.Parse(yaml);
 
@@ -73,12 +73,14 @@ public sealed class YamlArrayTest
         string expectedJson
     )
     {
-        YamlTestHelper.AssertYamlParsesAsJsonValueAndRoundTrips(yaml, expectedJson);
+        YamlTestFixture.Assert_YamlMatchesJsonValue_YamlRoundTrips(yaml, expectedJson);
     }
 
     [Theory]
     [InlineData("- [1, 2]\n- []\n")]
-    public void NestedArray_ParsesExpectedValuesAndRoundTripsRegardlessOfWriterStyle(string yaml)
+    public void BlockArrayWithNonemptyAndEmptyFlowArrays_ParsesExpectedValuesAndRoundTripsWithDefaultWriter(
+        string yaml
+    )
     {
         using var document = YamlDocument.Parse(yaml);
 

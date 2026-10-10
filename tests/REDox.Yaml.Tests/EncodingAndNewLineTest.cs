@@ -1,9 +1,9 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Text;
 
 namespace REDox.Yaml.Tests;
 
-public sealed class YamlEncodingAndNewLineTest
+public sealed class EncodingAndNewLineTest
 {
     [Fact]
     public void Utf16WithBom_AutoDetectsEncoding()
@@ -77,7 +77,7 @@ public sealed class YamlEncodingAndNewLineTest
         int expectedBytePosition
     )
     {
-        var exception = YamlTestHelper.AssertYamlParseError(
+        var exception = YamlTestFixture.AssertYamlParseError(
             () => YamlDocument.Parse(yaml),
             "InvalidFormat",
             expectedBytePosition
@@ -109,7 +109,7 @@ public sealed class YamlEncodingAndNewLineTest
         );
 
         var broken = encoding.GetPreamble().Concat(encoding.GetBytes("é日: x: y\n")).ToArray();
-        var exception = YamlTestHelper.AssertYamlParseError(
+        var exception = YamlTestFixture.AssertYamlParseError(
             () =>
                 YamlDocument.Parse(
                     broken,

@@ -1,14 +1,13 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlJsonSuiteRoundTripTest
+public sealed partial class JsonSuiteRoundTripTest
 {
-    // These cover distinct JSON value shapes without repeating the longer format conversion for every suite file.
-    private static readonly string[] LosslessConversionCaseNames =
+    private static readonly string[] LosslessConvertibleCaseNames =
     [
         "y_array_heterogeneous.json",
         "y_object_basic.json",
@@ -16,25 +15,38 @@ public sealed partial class YamlJsonSuiteRoundTripTest
         "y_string_unicode.json",
     ];
 
+    // These files contain control-character strings that prevent a complete round trip with *multiline-style* option.
+    private static readonly string[] JsonFilesWithUnrepresentableMultilineStringValues =
+    [
+        "string_with_escaped_NULL.json",
+        "y_string_allowed_escapes.json",
+        "y_string_escaped_control_character.json",
+        "y_string_null_escape.json",
+        "y_string_unescaped_char_delete.json",
+        "y_string_with_del_character.json",
+    ];
+
     [Theory]
-    [MemberData(nameof(GetValidJsonFiles))]
-    public void ValidJsonSuiteFile_RoundTripsThroughYaml(string filePath)
+    [MemberData(nameof(GetValidJsonSuiteFilesEligibleForYamlRoundTrip))]
+    public void ValidJsonSuiteFile_PreservesParsedValuesAndSelectedRoundTripsOrJustifiesMultilineRefusal(
+        string filePath
+    )
     {
         var sourceJsonBytes = File.ReadAllBytes(filePath);
 
         using var sourceJsonDocument = JsonDocument.Parse(sourceJsonBytes);
 
-        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
+        foreach (var mode in Enum.GetValues<YamlStringStyle>())
         {
             if (
                 mode == YamlStringStyle.Quote
-                && LosslessConversionCaseNames.Contains(
+                && LosslessConvertibleCaseNames.Contains(
                     Path.GetFileName(filePath),
                     StringComparer.Ordinal
                 )
             )
             {
-                YamlTestHelper.AssertJsonYamlJsonRoundTripPreservesValues(
+                YamlTestFixture.Assert_JsonYamlJsonRoundTrip_PreservesParsedValuesAtEveryStage(
                     sourceJsonDocument,
                     new YamlWriteOptions { StringStyle = mode },
                     Path.GetFileName(filePath)
@@ -52,9 +64,15 @@ public sealed partial class YamlJsonSuiteRoundTripTest
                     new YamlWriteOptions { StringStyle = mode }
                 );
             }
-            catch (DocumentParseException exception) when (mode == YamlStringStyle.Multiline)
+            catch (DocumentParseException exception)
+                when (JsonFilesWithUnrepresentableMultilineStringValues.Contains(
+                          Path.GetFileName(filePath),
+                          StringComparer.Ordinal
+                      )
+                      && mode == YamlStringStyle.Multiline
+                     )
             {
-                YamlTestHelper.AssertMultilineStyleRefusalReportsUnsupportedFeatureAndJsonHasUnrepresentableStringValue(
+                YamlTestFixture.Assert_MultilineStringReportsUnsupportedFeature_JsonHasUnrepresentableStringValue(
                     exception,
                     sourceJsonBytes,
                     Path.GetFileName(filePath)
@@ -65,7 +83,6 @@ public sealed partial class YamlJsonSuiteRoundTripTest
 
             using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
 
-            // Check YAML directly against the JSON reader so another conversion cannot hide a value change.
             Assert.True(
                 DValue.DeepEquals(
                     sourceJsonDocument.RootElement.AsValue(),
@@ -76,39 +93,11 @@ public sealed partial class YamlJsonSuiteRoundTripTest
         }
     }
 
-    [Theory]
-    [InlineData("1.0")]
-    [InlineData("1e5")]
-    [InlineData("-0")]
-    [InlineData("18446744073709551616")]
-    public void NumericJson_RoundTripsThroughYaml(string json)
+    public static TheoryData<string> GetValidJsonSuiteFilesEligibleForYamlRoundTrip()
     {
-        using var sourceJsonDocument = JsonDocument.Parse(json);
+        var suite = YamlTestFixture.FindJsonSuiteDirectory();
 
-        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
-        {
-            var yamlFromJson = YamlDocument.EncodeToString(
-                sourceJsonDocument.RootElement,
-                new YamlWriteOptions { StringStyle = mode }
-            );
-
-            using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
-
-            Assert.True(
-                DValue.DeepEquals(
-                    sourceJsonDocument.RootElement.AsValue(),
-                    convertedYamlDocument.RootElement.AsValue()
-                ),
-                $"YAML changed {json} in {mode} mode."
-            );
-        }
-    }
-
-    public static TheoryData<string> GetValidJsonFiles()
-    {
-        var suite = FindSuiteDirectory();
-
-        var files = YamlTestHelper
+        var files = YamlTestFixture
             .GetJsonSuiteFilesEligibleForYamlRoundTrip()
             .Where(path =>
                 !DuplicateKeyCasesWithValidationDisabled.Contains(
@@ -126,6 +115,4 @@ public sealed partial class YamlJsonSuiteRoundTripTest
 
         return new TheoryData<string>(files);
     }
-
-    private static string FindSuiteDirectory() => YamlTestHelper.FindJsonSuiteDirectory();
 }

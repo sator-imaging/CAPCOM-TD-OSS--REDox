@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -9,10 +10,82 @@ using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-internal static class YamlTestHelper
+internal static class YamlTestFixture
 {
-    // NOTE: DocumentParseException has no error-code property.
-    //       Prefix the code with the document type for this assertion.
+    public const string MixedScalarAndNestedCollectionsYaml =
+        "name: \"a: b\"\nlist:\n  - 1\n  - true\n  - null\nnested:\n  key: 1.5\n";
+
+    public const string ExpectedMixedScalarAndNestedCollectionsJson =
+        "{\"name\":\"a: b\",\"list\":[1,true,null],\"nested\":{\"key\":1.5}}";
+
+    public const string MixedScalarsNestedCollectionsAndTriviaYamlSource =
+        "# head\nname: text # note\nnumber: 42\nfloat: 1.5\nflag: true\nnothing: null\nwhen: 2001-12-14\n"
+        + "list:\n  - 1\n  - two\n  - [3, 4]\nnested:\n  key: value\n  deep:\n    - x: 1\n    - y\nblock: |\n  one\n  two\n";
+
+    public static readonly YamlWriteOptions LineFeedWriteOptions = new() { NewLine = "\n" };
+
+    public static readonly YamlDocumentOptions TriviaParseOptions = new() { PreserveTrivia = true };
+
+    public static readonly YamlWriteOptions TriviaWriteOptions = new()
+    {
+        NewLine = "\n",
+        PreserveTrivia = true,
+    };
+
+    public static void RandomizeArrayPoolBuffers(string parsedYamlSource)
+    {
+        var sourceByteLength = Encoding.UTF8.GetByteCount(parsedYamlSource);
+
+        // PooledBufferWriter uses the shared array pool.
+        // Randomizing buffer guarantees that YamlDocument doesn't refer it.
+        for (int reuseAttemp = 0; reuseAttemp < 3; reuseAttemp++)
+        {
+            foreach (
+                var requestedSize in new[]
+                {
+                    Math.Max(1, sourceByteLength),
+                    Math.Max(1, sourceByteLength >> 1),
+                    Math.Max(1, sourceByteLength >> 2),
+                    Math.Max(1, sourceByteLength >> 3),
+                    Math.Max(1, sourceByteLength >> 4),
+                    Math.Max(1, sourceByteLength >> 5),
+                    Math.Max(1, sourceByteLength >> 6),
+                    Math.Max(1, sourceByteLength >> 7),
+                    SerializerSettings.Default.DefaultBufferSize,
+                }
+            )
+            {
+                if (requestedSize == 0)
+                {
+                    continue;
+                }
+
+                var rentedBuffer = ArrayPool<byte>.Shared.Rent(requestedSize);
+
+                try
+                {
+                    Random.Shared.NextBytes(rentedBuffer);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rentedBuffer);
+                }
+            }
+        }
+    }
+
+    public static T ToObjectOfTypePolyfill<T>(DElement element)
+        where T : class
+    {
+        var value = element.ToObject(typeof(T));
+
+        Debug.Assert(value is T);
+
+        return (T)value;
+    }
+
+    // NOTE: DocumentParseException has no ErrorCode property.
+    //       For the test reliability, prefix document type and code.
     public static void AssertYamlParseError(
         DocumentParseException exception,
         string expectedErrorCode,
@@ -41,8 +114,8 @@ internal static class YamlTestHelper
     }
 
     // These inputs may be accepted or rejected by the JSON reader, including during lazy value access.
-    // A rejected case may stop this YAML test only when the diagnostic belongs to that reader.
-    public static void AssertParseErrorCameFromJsonDocument(
+    // A rejected case may stop YAML test only when the diagnostic belongs to that reader.
+    public static void AssertParseError_FromJsonDocument(
         DocumentParseException exception,
         byte[] json
     )
@@ -53,7 +126,7 @@ internal static class YamlTestHelper
         Assert.True(exception.BytePositionInLine >= 0);
     }
 
-    public static void AssertYamlParsesAsJsonValueAndRoundTrips(string yaml, string expectedJson)
+    public static void Assert_YamlMatchesJsonValue_YamlRoundTrips(string yaml, string expectedJson)
     {
         using var expectedJsonDocument = JsonDocument.Parse(expectedJson);
         using var parsedYamlDocument = YamlDocument.Parse(yaml);
@@ -79,8 +152,8 @@ internal static class YamlTestHelper
         );
     }
 
-    // Each parsed document must retain the value; matching serialized text alone cannot establish a lossless conversion.
-    public static void AssertJsonYamlJsonRoundTripPreservesValues(
+    // Matching serialized text alone cannot establish a lossless conversion.
+    public static void Assert_JsonYamlJsonRoundTrip_PreservesParsedValuesAtEveryStage(
         JsonDocument sourceJsonDocument,
         YamlWriteOptions options,
         string caseName
@@ -99,14 +172,11 @@ internal static class YamlTestHelper
         );
 
         // The API compares the JSON read back with both this YAML and the original JSON source.
-        convertedYamlDocument.ValidateJsonYamlRoundTripPreservesValues(
-            options,
-            sourceJsonDocument.RootElement
-        );
+        convertedYamlDocument.ValidateJsonAndYamlRoundTrip(options, sourceJsonDocument.RootElement);
     }
 
     // The source check cannot establish which string caused the refusal.
-    public static void AssertMultilineStyleRefusalReportsUnsupportedFeatureAndJsonHasUnrepresentableStringValue(
+    public static void Assert_MultilineStringReportsUnsupportedFeature_JsonHasUnrepresentableStringValue(
         DocumentParseException exception,
         byte[] json,
         string name
@@ -183,7 +253,8 @@ internal static class YamlTestHelper
         }
     }
 
-    // Core has no empty-document value, so an empty YAML stream uses a null root (see YamlDocument.Read).
+    // NOTE: Core data model has no empty document classification.
+    //       To distinguish an error and empty document, this serializer uses a null root (see YamlDocument.Read).
     public static void AssertEmptyYamlDocumentHasNullRoot(YamlDocument document)
     {
         Assert.True(document.IsValid);
@@ -191,13 +262,15 @@ internal static class YamlTestHelper
         Assert.Equal("null", JsonDocument.EncodeToString(document.RootElement));
     }
 
-    // "n_*": JSON that a parser must reject. The JSON reader of the core validates lazily, so it rejects such a file
+    // "n_*"
+    // JSON that a parser must reject. The JSON reader of the core validates lazily, so it rejects such a file
     // either when it reads it or when a value is first taken out of the document, which is while the YAML is written.
     // Either way the rejection comes from the JSON reader and the YAML code is not involved, so no YAML test uses
     // these files. The few the JSON reader wrongly accepts are a JSON problem and show nothing about YAML.
     public const string JsonSuiteInvalidPattern = "n_*";
 
-    // "i_*": JSON that the specification leaves ambiguous, so a parser may accept or reject it (huge numbers, lone
+    // "i_*"
+    // JSON that the specification leaves ambiguous, so a parser may accept or reject it (huge numbers, lone
     // surrogates, invalid UTF-8, 500 nested arrays, ...). Whatever is accepted need not come back equal (a lone
     // surrogate is written as the replacement character), so these files are left out of the round trip tests.
     // YamlJsonSuiteRoundTripTest.SpecAmbiguousTest only checks that accepted files produce parseable YAML;
@@ -237,7 +310,7 @@ internal static class YamlTestHelper
         throw new DirectoryNotFoundException("JSONTestSuite has not been initialized.");
     }
 
-    private static IEnumerable<string> GetJsonSuiteAllFiles()
+    private static string[] GetJsonSuiteAllFiles()
     {
         var suite = FindJsonSuiteDirectory();
 
@@ -248,7 +321,8 @@ internal static class YamlTestHelper
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        // A new JSONTestSuite file must be reviewed even if it is excluded from YAML round trips.
+        // New JSONTestSuite file must be reviewed and update this assertion
+        // even if it is excluded from YAML round trips.
         Assert.Equal(340, files.Length);
 
         return files;
@@ -258,40 +332,59 @@ internal static class YamlTestHelper
     {
         return FileSystemName.MatchesSimpleExpression(pattern, Path.GetFileName(path));
     }
+
+    public enum Color
+    {
+        Red,
+        Green,
+    }
+
+    public sealed class Address
+    {
+        public string City { get; set; } = "";
+        public int Number { get; set; }
+    }
+
+    public sealed class Person
+    {
+        public string Name { get; set; } = "";
+        public int Age { get; set; }
+        public double Score { get; set; }
+        public bool Active { get; set; }
+        public int? Optional { get; set; }
+        public Color Favorite { get; set; }
+        public Address? Address { get; set; }
+        public List<string> Tags { get; set; } = [];
+        public Dictionary<string, int> Counts { get; set; } = [];
+    }
+
+    public static Person CreatePersonWithNestedAddressAndCollections() =>
+        new()
+        {
+            Name = "a: b\nsecond line",
+            Age = 42,
+            Score = 1.5,
+            Active = true,
+            Optional = null,
+            Favorite = Color.Green,
+            Address = new Address { City = "true", Number = 7 },
+            Tags = ["x", "123", "", "null"],
+            Counts = new Dictionary<string, int> { ["one"] = 1, ["two"] = 2 },
+        };
 }
 
-internal static class TestExtensions
+// Testing test fixture
+public sealed class YamlTestFixtureTest
 {
-    public static string? AsString(this DValue value) => (string?)value;
-
-    public static int AsInt32(this DValue value) => (int)value;
-
-    public static long AsInt64(this DValue value) => (long)value;
-
-    public static ulong AsUInt64(this DValue value) => (ulong)value;
-
-    public static double AsDouble(this DValue value) => (double)value;
-
-    public static bool AsBoolean(this DValue value) => (bool)value;
-
-    public static DateTimeOffset AsDateTimeOffset(this DValue value) => (DateTimeOffset)value;
-
-    public static DTokenKind AsTokenKind(this DValue value) => value.AsElement().Token.Kind;
-}
-
-public sealed class YamlTestHelperTest
-{
-    // The helper passes only when a string value contains a control character other than LF or TAB. It does not
-    // inspect an exception or prove that this character caused a multiline writer to refuse the document.
     [Theory]
     [InlineData("\"a\\u0000b\"", true)]
     [InlineData("\"\\r\"", true)]
     [InlineData("{\"a\":[\"x\",{\"b\":\"\\u0001\"}]}", true)]
     [InlineData("\"line1\\nline2\\ttab\"", false)]
     [InlineData("{\"a\":[\"b\",1,null]}", false)]
-    // A control character in a key is not a string value: keys are not written as block scalars.
+    // Keys are not written as block scalars, so a control character in a key cannot justify refusal.
     [InlineData("{\"\\u0000\":1}", false)]
-    public void JsonStringValueUnrepresentableAsBlockScalar_IsRequiredForMultilineRefusal(
+    public void JsonStringValueWithUnsupportedBlockScalarCharacter_IsDetectedOnlyInValues(
         string json,
         bool justified
     )
@@ -300,12 +393,12 @@ public sealed class YamlTestHelperTest
 
         if (justified)
         {
-            YamlTestHelper.AssertJsonContainsStringValueUnrepresentableAsBlockScalar(bytes, json);
+            YamlTestFixture.AssertJsonContainsStringValueUnrepresentableAsBlockScalar(bytes, json);
         }
         else
         {
             Assert.ThrowsAny<Xunit.Sdk.XunitException>(() =>
-                YamlTestHelper.AssertJsonContainsStringValueUnrepresentableAsBlockScalar(
+                YamlTestFixture.AssertJsonContainsStringValueUnrepresentableAsBlockScalar(
                     bytes,
                     json
                 )

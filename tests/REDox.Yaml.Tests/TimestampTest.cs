@@ -2,7 +2,7 @@
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlTimestampTest
+public sealed partial class TimestampTest
 {
     [Theory]
     [InlineData("2001-12-14", DTokenVariant.TimestampLocalDate)]
@@ -66,7 +66,7 @@ public sealed partial class YamlTimestampTest
     [InlineData("2001-12-14T21:59:43.1234567890123Z")]
     [InlineData("2001-12-14T21:59:43.Z")]
     [InlineData("2001-12-14T21:59:43")]
-    public void TimestampText_RoundTripsWithoutNormalization(string timestamp)
+    public void TimestampText_WritesWithoutNormalization(string timestamp)
     {
         var yaml = "map:\n  key: " + timestamp + "\nlist:\n  - " + timestamp + "\n";
 
@@ -81,7 +81,7 @@ public sealed partial class YamlTimestampTest
     }
 
     [Fact]
-    public void RootTimestamp_RoundTripsAsWritten()
+    public void RootTimestamp_WritesAsOriginallyParsed()
     {
         using var document = YamlDocument.Parse("2001-12-14 21:59:43.10 -5\n");
 

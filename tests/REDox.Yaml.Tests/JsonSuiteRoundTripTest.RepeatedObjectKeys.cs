@@ -1,10 +1,11 @@
+﻿using System;
 using System.IO;
 using System.Linq;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlJsonSuiteRoundTripTest
+public sealed partial class JsonSuiteRoundTripTest
 {
     private static readonly string[] DuplicateKeyCasesWithValidationDisabled =
     [
@@ -15,13 +16,26 @@ public sealed partial class YamlJsonSuiteRoundTripTest
         "test_transform/object_same_key_unclear_values.json",
     ];
 
+    public static TheoryData<string> GetDuplicateKeyJsonSuiteFilesWithValidationDisabled()
+    {
+        var suite = YamlTestFixture.FindJsonSuiteDirectory();
+
+        return new TheoryData<string>(
+            DuplicateKeyCasesWithValidationDisabled.Select(path =>
+                Path.Combine(suite, path.Replace('/', Path.DirectorySeparatorChar))
+            )
+        );
+    }
+
     [Theory]
-    [MemberData(nameof(GetDuplicateKeyFiles))]
-    public void DuplicateJsonKeysWithValidationDisabled_RoundTrip(string filePath)
+    [MemberData(nameof(GetDuplicateKeyJsonSuiteFilesWithValidationDisabled))]
+    public void DuplicateJsonKeysWithValidationDisabled_PreserveEveryKeyAndValueInOrderWhenConvertedToYaml(
+        string filePath
+    )
     {
         using var sourceJsonDocument = JsonDocument.Parse(File.ReadAllBytes(filePath));
 
-        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
+        foreach (var mode in Enum.GetValues<YamlStringStyle>())
         {
             var yamlFromJson = YamlDocument.EncodeToString(
                 sourceJsonDocument.RootElement,
@@ -54,16 +68,5 @@ public sealed partial class YamlJsonSuiteRoundTripTest
                 );
             }
         }
-    }
-
-    public static TheoryData<string> GetDuplicateKeyFiles()
-    {
-        var suite = FindSuiteDirectory();
-
-        return new TheoryData<string>(
-            DuplicateKeyCasesWithValidationDisabled.Select(path =>
-                Path.Combine(suite, path.Replace('/', Path.DirectorySeparatorChar))
-            )
-        );
     }
 }

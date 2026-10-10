@@ -1,10 +1,8 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
+﻿namespace REDox.Yaml;
 
-namespace REDox.Yaml;
-
-internal enum TextEncodingKind
+internal enum TextEncodingKind : byte
 {
+    // default
     Utf8,
     Utf16LittleEndian,
     Utf16BigEndian,

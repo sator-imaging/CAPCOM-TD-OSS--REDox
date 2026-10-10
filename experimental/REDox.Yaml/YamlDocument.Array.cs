@@ -1,7 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-using System;
+﻿using System;
 using REDox.Serialization;
 
 namespace REDox.Yaml;
@@ -11,18 +8,19 @@ public sealed partial class YamlDocument
     private bool IsBlockSequenceIndicator(int position)
     {
         return Source[position] == YamlSyntax.Dash
-            && (
-                position + 1 == Source.Length
-                || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position + 1])
-            );
+               && (
+                   position + 1 == Source.Length
+                   || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position + 1])
+               );
     }
 
     private uint ParseFlowArray(int depth, int parentIndent)
     {
-        var arrayId = AllocToken(DToken.MakeArray(0));
+        var arrayId = AllocToken(DToken.MakeArray(count: 0));
+        _lastParsedNodeId = arrayId;
         _position++;
 
-        SkipTrivia();
+        SkipTrivia(leaveSameLineCommentForNextNode: true);
         CheckFlowIndent(parentIndent);
 
         while (_position < Source.Length && Source[_position] != YamlSyntax.FlowSequenceEnd)
@@ -33,21 +31,21 @@ public sealed partial class YamlDocument
             }
 
             if (
-                IsExplicitKeyStart(true)
+                IsExplicitKeyStart(flow: true)
                 || Source[_position]
                     is not (YamlSyntax.FlowSequenceStart or YamlSyntax.FlowMappingStart)
-                    && IsFlowSinglePairStart()
+                && IsFlowSinglePairStart()
             )
             {
                 ParseFlowSinglePair(depth + 1, parentIndent);
             }
             else
             {
-                ParseNode(depth + 1, true, parentIndent);
+                ParseNode(depth + 1, flow: true, parentIndent);
             }
 
             IncToken(arrayId);
-            SkipTrivia();
+            SkipTrivia(leaveSameLineCommentForNextNode: false);
             CheckFlowIndent(parentIndent);
 
             if (_position >= Source.Length)
@@ -60,19 +58,24 @@ public sealed partial class YamlDocument
                 break;
             }
 
-            if (Source[_position++] != YamlSyntax.FlowSeparator)
+            // Keep the cursor on an unexpected byte so the parse error reports its position.
+            if (Source[_position] != YamlSyntax.FlowSeparator)
             {
                 ThrowParseError(ParseException.ErrorCode.InvalidFormat);
             }
 
-            SkipTrivia();
+            _position++;
+
+            SkipTrivia(leaveSameLineCommentForNextNode: false);
             CheckFlowIndent(parentIndent);
         }
 
-        if (_position >= Source.Length || Source[_position++] != YamlSyntax.FlowSequenceEnd)
+        if (_position >= Source.Length || Source[_position] != YamlSyntax.FlowSequenceEnd)
         {
             ThrowParseError(ParseException.ErrorCode.InvalidFormat);
         }
+
+        _position++;
 
         CompleteContainer(arrayId);
 
@@ -82,9 +85,15 @@ public sealed partial class YamlDocument
     private uint ParseBlockArray(int depth)
     {
         var baseIndent = _position - FindCurrentLineStart(_position);
-        var arrayId = AllocToken(DToken.MakeArray(0));
-        while (_position < Source.Length && IsBlockSequenceIndicator(_position))
+        var arrayId = AllocToken(DToken.MakeArray(count: 0));
+        _lastParsedNodeId = arrayId;
+
+        // ParseNode already confirmed the first dash. Only subsequent entries need this lookahead.
+        var firstEntry = true;
+        while (_position < Source.Length && (firstEntry || IsBlockSequenceIndicator(_position)))
         {
+            firstEntry = false;
+
             RequireAllowedDepth(depth + 1);
 
             _position++;
@@ -93,10 +102,9 @@ public sealed partial class YamlDocument
 
             SkipInlineSpaces();
 
-            var tabSeparated = Source[separatorStart.._position].Contains(YamlSyntax.Tab);
             if (
                 _position == Source.Length
-                || IsLineEnd(Source[_position])
+                || YamlSyntax.IsLineEnd(Source[_position])
                 || Source[_position] == YamlSyntax.CommentIndicator
             )
             {
@@ -106,7 +114,7 @@ public sealed partial class YamlDocument
 
                 if (Indent > baseIndent)
                 {
-                    SkipTrivia();
+                    AdvanceToPeekedContent(Position);
                     ParseNode(depth + 1, parentIndent: baseIndent);
                 }
                 else
@@ -117,7 +125,10 @@ public sealed partial class YamlDocument
             else
             {
                 // A tab cannot separate the "-" from a nested block collection: its column would be undefined.
-                if (tabSeparated && (IsBlockSequenceIndicator(_position) || IsBlockMapStart()))
+                if (
+                    Source[separatorStart.._position].Contains(YamlSyntax.Tab)
+                    && (IsBlockSequenceIndicator(_position) || IsBlockMapStart())
+                )
                 {
                     ThrowParseError(ParseException.ErrorCode.InvalidFormat);
                 }
@@ -133,25 +144,26 @@ public sealed partial class YamlDocument
             }
 
             IncToken(arrayId);
-            SkipTrivia();
+            SkipTrivia(leaveSameLineCommentForNextNode: false);
 
-            var following = PeekNextContent();
-            if (following.Indent != baseIndent || following.Position >= Source.Length)
+            if (_position >= Source.Length)
             {
                 break;
             }
 
-            _position = following.Position;
+            // SkipTrivia already passed blank and comment lines, so only this line's indentation remains to check.
+            var indent = CountIndent(FindCurrentLineStart(_position));
+            if (indent != baseIndent)
+            {
+                break;
+            }
 
             if (IndentationContainsTab(_position))
             {
                 ThrowParseError(ParseException.ErrorCode.InvalidFormat);
             }
 
-            if (!IsBlockSequenceIndicator(_position))
-            {
-                break;
-            }
+            // Checking the indicator here would repeat the loop guard's check on the same byte.
         }
 
         CompleteContainer(arrayId);
@@ -163,13 +175,15 @@ public sealed partial class YamlDocument
         Utf8TextWriter writer,
         in DataReader reader,
         uint arrayId,
-        YamlWriteOptions options,
+        in YamlWriteOptions options,
         int depth,
         uint followingTokenId
     )
     {
-        var count = reader.GetValueCount(arrayId);
-        if (count == 0)
+        // The first MoveNext is needed for writing anyway, so use it to detect an empty array.
+        var values = reader.EnumerateArray(arrayId).GetEnumerator();
+        var hasValue = values.MoveNext();
+        if (!hasValue)
         {
             WriteEmptyCollection(writer, isMap: false, afterIndicator: false);
 
@@ -178,8 +192,6 @@ public sealed partial class YamlDocument
 
         var separatorWritten = false;
         var endsWithBlockScalar = false;
-        var values = reader.EnumerateArray(arrayId).GetEnumerator();
-        var hasValue = values.MoveNext();
         while (hasValue)
         {
             var valueId = values.Current;
@@ -189,22 +201,26 @@ public sealed partial class YamlDocument
             if (separatorWritten)
             {
                 // See WriteMap: the previous entry's line break is deferred so its trailing comment can be added.
-                if (!endsWithBlockScalar)
+                if (options.PreserveTrivia && !endsWithBlockScalar)
                 {
-                    WriteInlineComment(writer, reader, valueId, options);
+                    WriteTrailingComment(writer, reader, valueId, options);
                 }
 
                 writer.WriteIndentNewLine();
             }
 
-            WriteTrivia(
-                writer,
-                reader,
-                valueId,
-                options,
-                separatorWritten,
-                skipInlineComment: separatorWritten
-            );
+            // Most writes omit trivia. Avoid entering its enumerator for every array element.
+            if (options.PreserveTrivia)
+            {
+                WriteTrivia(
+                    writer,
+                    reader,
+                    valueId,
+                    options,
+                    separatorWritten,
+                    skipTrailingComment: separatorWritten
+                );
+            }
 
             WriteCollectionIndicator(writer, mapValue: false);
 
@@ -212,16 +228,19 @@ public sealed partial class YamlDocument
 
             WriteValueSeparator(
                 writer,
-                blockValue: value.IsContainer && reader.GetValueCount(valueId) > 0
+                // Reuse the parsed token count. Edited containers keep their count in extension data.
+                blockValue: value.IsContainer
+                            && (value.IsExtended ? reader.GetValueCount(valueId) : value.Count) > 0
             );
 
             endsWithBlockScalar = WriteNode(
                 writer,
                 reader,
                 valueId,
+                value,
                 options,
                 depth + 1,
-                false,
+                isKey: false,
                 nextTokenId
             );
 
