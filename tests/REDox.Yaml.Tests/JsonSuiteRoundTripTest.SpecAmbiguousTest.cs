@@ -1,21 +1,20 @@
-using System.IO;
+﻿using System.IO;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlJsonSuiteRoundTripTest
+public sealed partial class JsonSuiteRoundTripTest
 {
     [Theory]
     [MemberData(nameof(GetSpecAmbiguousJsonFiles))]
-    public void SpecAmbiguousJsonFile_IsRejectedOrSurvivesYamlConversion(string filePath)
+    public void SpecAmbiguousJsonFile_IsRejectedByJsonReaderOrProducesParseableYaml(string filePath)
     {
         var sourceJsonBytes = File.ReadAllBytes(filePath);
         string yamlFromJson;
 
-        // The JSON specification permits either accepting or rejecting these i_* files. A JSON rejection ends this
-        // case without exercising YAML. The core validates lazily, so rejection can occur during YAML writing too.
-        // For accepted files this checks only that the YAML parses: ambiguous values may change, and no value
-        // comparison is made here.
+        // The JSON specification permits either accepting or rejecting these i_* files.
+        // A JSON rejection ends this test case without exercising YAML.
+        // The core validates lazily, so rejection can occur during YAML writing too.
         try
         {
             using var sourceJsonDocument = JsonDocument.Parse(sourceJsonBytes);
@@ -24,7 +23,7 @@ public sealed partial class YamlJsonSuiteRoundTripTest
         }
         catch (DocumentParseException exception)
         {
-            YamlTestHelper.AssertParseErrorCameFromJsonDocument(exception, sourceJsonBytes);
+            YamlTestFixture.AssertParseError_FromJsonDocument(exception, sourceJsonBytes);
 
             return;
         }
@@ -35,7 +34,7 @@ public sealed partial class YamlJsonSuiteRoundTripTest
     public static TheoryData<string> GetSpecAmbiguousJsonFiles()
     {
         var cases = new TheoryData<string>(
-            YamlTestHelper.GetJsonSuiteFiles(YamlTestHelper.JsonSuiteSpecAmbiguousPattern)
+            YamlTestFixture.GetJsonSuiteFiles(YamlTestFixture.JsonSuiteSpecAmbiguousPattern)
         );
 
         Assert.Equal(35, cases.Count);

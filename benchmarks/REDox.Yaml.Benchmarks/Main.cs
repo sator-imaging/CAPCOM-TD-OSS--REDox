@@ -1,7 +1,14 @@
-using BenchmarkDotNet.Configs;
+﻿using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Running;
 
-var config = DefaultConfig.Instance.WithOptions(ConfigOptions.JoinSummary);
+internal class Program
+{
+    private static void Main(string[] args)
+    {
+        var config = DefaultConfig.Instance.WithOptions(ConfigOptions.JoinSummary);
 
-var switcher = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly);
-switcher.Run(args, config);
+        var switcher = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly);
+
+        switcher.Run(args, config);
+    }
+}

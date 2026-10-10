@@ -1,10 +1,11 @@
+﻿using System;
 using System.IO;
 using System.Linq;
 using REDox.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlJsonSuiteRoundTripTest
+public sealed partial class JsonSuiteRoundTripTest
 {
     private static readonly string[] UnsupportedIsolatedSurrogateCases =
     [
@@ -15,11 +16,11 @@ public sealed partial class YamlJsonSuiteRoundTripTest
 
     [Theory]
     [MemberData(nameof(GetUnsupportedIsolatedSurrogateFiles))]
-    public void IsolatedSurrogates_ChangeDuringJsonRoundTripThroughYaml(string filePath)
+    public void IsolatedSurrogates_ReplacedOnSerialize(string filePath)
     {
         using var sourceJsonDocument = JsonDocument.Parse(File.ReadAllBytes(filePath));
 
-        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
+        foreach (var mode in Enum.GetValues<YamlStringStyle>())
         {
             var yamlFromJson = YamlDocument.EncodeToString(
                 sourceJsonDocument.RootElement,
@@ -28,8 +29,6 @@ public sealed partial class YamlJsonSuiteRoundTripTest
 
             using var convertedYamlDocument = YamlDocument.Parse(yamlFromJson);
 
-            // The JSON reader's isolated surrogate cannot survive YAML's UTF-8 representation. This assertion
-            // records that the value changed; it does not verify which replacement value YAML produced.
             Assert.False(
                 DValue.DeepEquals(
                     sourceJsonDocument.RootElement.AsValue(),
@@ -42,7 +41,7 @@ public sealed partial class YamlJsonSuiteRoundTripTest
 
     public static TheoryData<string> GetUnsupportedIsolatedSurrogateFiles()
     {
-        var suite = FindSuiteDirectory();
+        var suite = YamlTestFixture.FindJsonSuiteDirectory();
 
         return new TheoryData<string>(
             UnsupportedIsolatedSurrogateCases.Select(path =>

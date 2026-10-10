@@ -1,12 +1,9 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-using System;
+﻿using System;
 using System.Globalization;
 
 namespace REDox.Yaml;
 
-internal static class YamlTimestampHelper
+internal static class TimestampHelper
 {
     private readonly record struct ParsedTimestampParts(
         DateTime WallClock,
@@ -14,9 +11,10 @@ internal static class YamlTimestampHelper
         TimestampKind Kind
     );
 
+    // TODO: Avoid string operation.
     /// <summary>
-    /// Decides whether a text is a timestamp. This only looks at the text: nothing is converted or normalized.
-    /// A text that looks like a timestamp but is not a real date or time, such as "2001-13-45", is not one.
+    /// Decides whether a text is a timestamp.
+    /// A text that looks like a timestamp but is not a real date or time is ignored (e.g., "2001-13-45").
     /// </summary>
     public static bool TryGetKind(string text, out TimestampKind kind)
     {
@@ -33,8 +31,7 @@ internal static class YamlTimestampHelper
     }
 
     /// <summary>
-    /// Reads a timestamp as a <see cref="DateTimeOffset" />. A timestamp without an offset is placed in the time
-    /// zone given by <paramref name="unspecifiedOffsetTimeZone" />.
+    /// A timestamp without an offset is placed in the given time zone <paramref name="unspecifiedOffsetTimeZone" />.
     /// </summary>
     public static DateTimeOffset ToDateTimeOffset(
         string text,
@@ -47,19 +44,15 @@ internal static class YamlTimestampHelper
         return new DateTimeOffset(parts.WallClock, offset);
     }
 
-    /// <summary>
-    /// Reads a timestamp as a <see cref="DateTime" />: the wall-clock time as written, or the UTC time when the
-    /// timestamp has an offset.
-    /// </summary>
     public static DateTime ToDateTime(string text, TimeZoneInfo unspecifiedOffsetTimeZone)
     {
         var parts = ParseOrThrow(text);
 
         return parts.Offset.HasValue
-                ? new DateTimeOffset(parts.WallClock, parts.Offset.Value).UtcDateTime
+            ? new DateTimeOffset(parts.WallClock, parts.Offset.Value).UtcDateTime
             : unspecifiedOffsetTimeZone == TimeZoneInfo.Utc
                 ? DateTime.SpecifyKind(parts.WallClock, DateTimeKind.Utc)
-            : parts.WallClock;
+                : parts.WallClock;
     }
 
     private static ParsedTimestampParts ParseOrThrow(string text)
@@ -72,9 +65,28 @@ internal static class YamlTimestampHelper
             );
     }
 
+    public static bool StartsLikeTimestamp(ReadOnlySpan<byte> text)
+    {
+        // TODO: i18n support. 4 digits followed by '-' is very limited.
+        //       Add option something like RecognizeExtendedDateTimeFormat.
+        return text.Length >= 8
+               && text[4] == YamlSyntax.Dash
+               && YamlSyntax.IsAsciiDigit(text[0])
+               && YamlSyntax.IsAsciiDigit(text[1])
+               && YamlSyntax.IsAsciiDigit(text[2])
+               && YamlSyntax.IsAsciiDigit(text[3]);
+    }
+
     private static bool TryParse(string text, out ParsedTimestampParts parts)
     {
         parts = default;
+
+        // TODO: i18n support. 4 digits followed by '-' is very limited.
+        //       Add option something like RecognizeExtendedDateTimeFormat.
+        if (text.Length < 8 || text[4] != YamlSyntax.Dash)
+        {
+            return false;
+        }
 
         var match = YamlSyntax.TimestampPattern().Match(text);
         if (!match.Success)
@@ -82,9 +94,9 @@ internal static class YamlTimestampHelper
             return false;
         }
 
-        var year = int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
-        var month = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
-        var day = int.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
+        var year = int.Parse(match.Groups[1].ValueSpan, CultureInfo.InvariantCulture);
+        var month = int.Parse(match.Groups[2].ValueSpan, CultureInfo.InvariantCulture);
+        var day = int.Parse(match.Groups[3].ValueSpan, CultureInfo.InvariantCulture);
 
         // The year 0000 does not exist in DateTime.
         if (year < 1 || month is < 1 or > 12 || day < 1 || day > DateTime.DaysInMonth(year, month))
@@ -95,32 +107,39 @@ internal static class YamlTimestampHelper
         var wallClock = new DateTime(year, month, day);
         if (!match.Groups[4].Success)
         {
-            parts = new ParsedTimestampParts(wallClock, null, TimestampKind.LocalDate);
+            parts = new ParsedTimestampParts(wallClock, Offset: null, TimestampKind.LocalDate);
 
             return true;
         }
 
-        var hour = int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
-        var minute = int.Parse(match.Groups[5].Value, CultureInfo.InvariantCulture);
-        var second = int.Parse(match.Groups[6].Value, CultureInfo.InvariantCulture);
+        var hour = int.Parse(match.Groups[4].ValueSpan, CultureInfo.InvariantCulture);
+        var minute = int.Parse(match.Groups[5].ValueSpan, CultureInfo.InvariantCulture);
+        var second = int.Parse(match.Groups[6].ValueSpan, CultureInfo.InvariantCulture);
         if (hour > 23 || minute > 59 || second > 59)
         {
             return false;
         }
 
-        wallClock = wallClock.AddHours(hour).AddMinutes(minute).AddSeconds(second);
+        wallClock = new DateTime(year, month, day, hour, minute, second);
 
         // A fraction finer than 100 ns (7 digits) is cut off in the DateTime value only; the written text is kept.
         if (match.Groups[7].Success && match.Groups[7].Length > 0)
         {
-            var digits = match.Groups[7].Value;
-            digits = digits.Length > 7 ? digits[..7] : digits.PadRight(7, '0');
-            wallClock = wallClock.AddTicks(long.Parse(digits, CultureInfo.InvariantCulture));
+            var digits = match.Groups[7].ValueSpan;
+            digits = digits.Length > 7 ? digits[..7] : digits;
+
+            var ticks = long.Parse(digits, CultureInfo.InvariantCulture);
+            for (var width = digits.Length; width < 7; width++)
+            {
+                ticks *= 10;
+            }
+
+            wallClock = wallClock.AddTicks(ticks);
         }
 
         if (!match.Groups[8].Success)
         {
-            parts = new ParsedTimestampParts(wallClock, null, TimestampKind.LocalDateTime);
+            parts = new ParsedTimestampParts(wallClock, Offset: null, TimestampKind.LocalDateTime);
 
             return true;
         }
@@ -144,9 +163,15 @@ internal static class YamlTimestampHelper
             return true;
         }
 
-        var parts = zone[1..].Split((char)YamlSyntax.TimeFieldSeparator);
-        var hours = int.Parse(parts[0], CultureInfo.InvariantCulture);
-        var minutes = parts.Length > 1 ? int.Parse(parts[1], CultureInfo.InvariantCulture) : 0;
+        var time = zone.AsSpan(1);
+        var separator = time.IndexOf((char)YamlSyntax.TimeFieldSeparator);
+        var hours = int.Parse(
+            separator < 0 ? time : time[..separator],
+            CultureInfo.InvariantCulture
+        );
+
+        var minutes =
+            separator < 0 ? 0 : int.Parse(time[(separator + 1)..], CultureInfo.InvariantCulture);
 
         // DateTimeOffset accepts offsets of up to 14 hours.
         if (minutes > 59 || hours * 60 + minutes > 14 * 60)
@@ -154,7 +179,7 @@ internal static class YamlTimestampHelper
             return false;
         }
 
-        offset = new TimeSpan(hours, minutes, 0);
+        offset = new TimeSpan(hours, minutes, seconds: 0);
 
         if (zone[0] == YamlSyntax.Dash)
         {

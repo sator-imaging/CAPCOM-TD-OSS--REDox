@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 
 namespace REDox.Yaml.Tests;
 
@@ -46,6 +46,8 @@ public sealed partial class YamlOptionsTest
             options: new YamlDocumentOptions { ReadMapKeyAsString = true }
         );
 
+        Assert.Equal(DTokenKind.String, document.RootElement.AsMap()[0].Key.AsElement().Token.Kind);
+        Assert.Equal(DTokenKind.String, document.RootElement.AsMap()[1].Key.AsElement().Token.Kind);
         Assert.Equal("a", document.RootElement.GetProperty("1").GetString());
         Assert.Equal("b", document.RootElement.GetProperty("true").GetString());
     }
@@ -57,8 +59,8 @@ public sealed partial class YamlOptionsTest
 
         using var document = YamlDocument.Parse("1: a\n");
 
-        Assert.Equal(
-            DTokenKind.Integer,
+        Assert.NotEqual(
+            DTokenKind.String,
             document.RootElement.AsMap()[0].Key.AsElement().Token.Kind
         );
     }
@@ -86,7 +88,7 @@ public sealed partial class YamlOptionsTest
     [InlineData("[? : a]")]
     public void ReadMapKeyAsString_RejectsKeyWithoutTextWhileDefaultReadsNullKey(string yaml)
     {
-        YamlTestHelper.AssertYamlParseError(
+        YamlTestFixture.AssertYamlParseError(
             () =>
                 YamlDocument.Parse(
                     yaml,

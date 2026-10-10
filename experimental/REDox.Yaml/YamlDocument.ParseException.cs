@@ -1,7 +1,4 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 
 namespace REDox.Yaml;
 
@@ -24,6 +21,7 @@ public sealed partial class YamlDocument
             InvalidOperation,
             InvalidOption,
             InvalidValue,
+            FormatCompatibility,
         }
 
         public ParseException(int position, ErrorCode code, string? message = null)
@@ -33,7 +31,9 @@ public sealed partial class YamlDocument
                 message is null
                     ? $"{nameof(YamlDocument)} Error ({code}): BytePosition: {position}"
                     : $"{nameof(YamlDocument)} Error ({code}): BytePosition: {position} ({message})"
-            ) { }
+            )
+        {
+        }
     }
 
     [DoesNotReturn]

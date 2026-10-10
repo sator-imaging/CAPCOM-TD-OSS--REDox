@@ -1,17 +1,13 @@
-// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-using System;
+﻿using System;
 using System.Buffers.Text;
 using System.Diagnostics;
+using System.Text;
 using REDox.Serialization;
 
 namespace REDox.Yaml;
 
 /// <summary>
-/// Writes the values it is given as block style YAML, as they come, without building a document first. It is what
-/// <see cref="YamlSerializer" /> uses to write an object. A map is written as its keys and values in turn, and a
-/// collection key is not supported.
+/// Writes the values as block style YAML without building a document first.
 /// </summary>
 public sealed class YamlWriter : DataWriter, IDisposable
 {
@@ -25,17 +21,13 @@ public sealed class YamlWriter : DataWriter, IDisposable
     }
 
     private readonly Utf8TextWriter _writer;
-    private Frame[] _frames = new Frame[8];
+    private Frame[] _frames = [];
     private int _top;
     private bool _rootWritten;
     private bool _completed;
     private YamlWriteOptions _options;
 
-    /// <summary>
-    /// Creates a writer that collects the YAML in memory, to be taken with <see cref="Encode" />.
-    /// </summary>
-    /// <param name="settings">The serializer settings. The default settings when null.</param>
-    /// <param name="options">How the YAML is written.</param>
+    /// <inheritdoc cref="YamlWriter"/>
     public YamlWriter(SerializerSettings? settings = null, YamlWriteOptions options = default)
     {
         settings ??= SerializerSettings.Default;
@@ -53,10 +45,8 @@ public sealed class YamlWriter : DataWriter, IDisposable
     }
 
     /// <summary>
-    /// Starts a new document, discarding what was written.
+    /// Reset document state.
     /// </summary>
-    /// <param name="settings">The serializer settings.</param>
-    /// <param name="options">How the YAML is written.</param>
     public void Reset(SerializerSettings settings, YamlWriteOptions options = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -77,10 +67,10 @@ public sealed class YamlWriter : DataWriter, IDisposable
     }
 
     /// <summary>
-    /// Ends the document and returns the UTF-8 bytes of the YAML.
+    /// Returns the UTF-8 bytes of the YAML.
     /// </summary>
     /// <returns>The UTF-8 bytes.</returns>
-    /// <exception cref="DocumentParseException">No value was written, or a map or an array is not ended.</exception>
+    /// <exception cref="DocumentParseException"></exception>
     public byte[] Encode()
     {
         if (!_completed)
@@ -101,6 +91,20 @@ public sealed class YamlWriter : DataWriter, IDisposable
         return _writer.Encode();
     }
 
+    private Frame[] ExpandFrameCapacity()
+    {
+        if (_frames.Length == 0)
+        {
+            _frames = new Frame[8];
+        }
+        else
+        {
+            Array.Resize(ref _frames, _top * 2);
+        }
+
+        return _frames;
+    }
+
     private void BeginEntry(ref Frame frame)
     {
         if (frame.Count > 0 || frame.AfterIndicator)
@@ -109,7 +113,9 @@ public sealed class YamlWriter : DataWriter, IDisposable
         }
     }
 
-    // Starts a value that is not a collection. Returns true when it is a map key.
+    /// <returns>
+    /// Returns true when it is a map key.
+    /// </returns>
     private bool BeginScalar(out int depth)
     {
         if (_top == 0)
@@ -187,6 +193,15 @@ public sealed class YamlWriter : DataWriter, IDisposable
 
     private void BeginContainer(bool isMap)
     {
+        // Reject excessive nesting before writing an indicator or changing the root state.
+        if (_top >= SerializerSettings.DefaultMaxDepth)
+        {
+            YamlDocument.ThrowGenericError(
+                YamlDocument.ParseException.ErrorCode.InvalidOperation,
+                $"Exceeded maximum depth of {SerializerSettings.DefaultMaxDepth}."
+            );
+        }
+
         var afterIndicator = false;
         var depth = 0;
         if (_top == 0)
@@ -214,17 +229,9 @@ public sealed class YamlWriter : DataWriter, IDisposable
             depth = parent.Depth + 1;
         }
 
-        if (_top >= SerializerSettings.DefaultMaxDepth)
-        {
-            YamlDocument.ThrowGenericError(
-                YamlDocument.ParseException.ErrorCode.InvalidOperation,
-                $"Exceeded maximum depth of {SerializerSettings.DefaultMaxDepth}."
-            );
-        }
-
         if (_top == _frames.Length)
         {
-            Array.Resize(ref _frames, _top * 2);
+            _frames = ExpandFrameCapacity();
         }
 
         _frames[_top++] = new Frame
@@ -245,14 +252,17 @@ public sealed class YamlWriter : DataWriter, IDisposable
             );
         }
 
-        var frame = _frames[--_top];
+        var frame = _frames[_top - 1];
         if (frame.ValueNext)
         {
+            // An invalid end must leave the open map on the stack for the next write attempt.
             YamlDocument.ThrowGenericError(
                 YamlDocument.ParseException.ErrorCode.InvalidOperation,
                 "A map key has no value."
             );
         }
+
+        _top--;
 
         // A collection with no entries is written on the line of its key or dash, as the flow form.
         if (frame.Count == 0)
@@ -269,25 +279,25 @@ public sealed class YamlWriter : DataWriter, IDisposable
     /// <inheritdoc />
     public override void WriteStartMap(int? definiteLength)
     {
-        BeginContainer(true);
+        BeginContainer(isMap: true);
     }
 
     /// <inheritdoc />
     public override void WriteEndMap()
     {
-        EndContainer(true);
+        EndContainer(isMap: true);
     }
 
     /// <inheritdoc />
     public override void WriteStartArray(int? definiteLength)
     {
-        BeginContainer(false);
+        BeginContainer(isMap: false);
     }
 
     /// <inheritdoc />
     public override void WriteEndArray()
     {
-        EndContainer(false);
+        EndContainer(isMap: false);
     }
 
     /// <inheritdoc />
@@ -401,29 +411,7 @@ public sealed class YamlWriter : DataWriter, IDisposable
         EndScalar(key);
     }
 
-    /// <inheritdoc />
-    public override void WriteString(string value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-
-        var key = BeginScalar(out var depth);
-
-        YamlDocument.WriteStringValue(
-            _writer,
-            Utf8Helper.GetUtf8String(value),
-            _options,
-            depth,
-            key
-        );
-
-        EndScalar(key);
-    }
-
-    /// <inheritdoc />
-    public override void WriteString(ReadOnlySpan<char> value)
-    {
-        WriteString(value.ToString());
-    }
+    // NOTE: Optimized for UTF-8. May be slower on UTF-16/32 output.
 
     /// <inheritdoc />
     public override void WriteString(ReadOnlySpan<byte> utf8Bytes)
@@ -435,15 +423,41 @@ public sealed class YamlWriter : DataWriter, IDisposable
     }
 
     /// <inheritdoc />
+    public override void WriteString(ReadOnlySpan<char> value)
+    {
+        int len = value.Length * 4; // multiply by 4 is enough. Encoding.UTF8.GetMaxByteCount(value.Length);
+        var span = len <= YamlDocument.StackLimit ? stackalloc byte[len] : default;
+
+        using var _ = ImmediateBuffer<byte>.Using(len, ref span);
+
+        int written = Encoding.UTF8.GetBytes(value, span);
+
+        WriteString(span[..written]);
+    }
+
+    /// <inheritdoc />
+    public override void WriteString(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        WriteString(value.AsSpan());
+    }
+
+    /// <inheritdoc />
     public override void WriteChar(char value)
     {
-        WriteString(value.ToString());
+        // A lone surrogate has no UTF-8 encoding; keep the encoder's replacement behavior.
+        var rune = Rune.TryCreate(value, out var validRune) ? validRune : Rune.ReplacementChar;
+
+        Span<byte> span = stackalloc byte[rune.Utf8SequenceLength];
+        int written = rune.EncodeToUtf8(span);
+
+        WriteString(span[..written]);
     }
 
     /// <inheritdoc />
     public override void WriteSymbol(Utf8Symbol value, SymbolKind kind = SymbolKind.Default)
     {
-        WriteString(value.ToString());
+        WriteString(value.AsSpan());
     }
 
     /// <inheritdoc />
@@ -454,7 +468,6 @@ public sealed class YamlWriter : DataWriter, IDisposable
 
         Debug.Assert(formatted);
 
-        // The formatted GUID must still honor YAML string styling, including forced quotes.
         WriteString(utf8Bytes[..bytesWritten]);
     }
 

@@ -1,12 +1,9 @@
-﻿// SPDX-FileCopyrightText: 2026 CAPCOM CO., LTD.
-// SPDX-License-Identifier: Apache-2.0
-
-using System;
+﻿using System;
 using System.Buffers;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using REDox.Json;
 using REDox.Serialization;
 
 namespace REDox.Yaml;
@@ -98,29 +95,6 @@ internal static partial class YamlSyntax
         "0123456789abcdefABCDEF"u8
     );
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsAsciiDigit(byte value) => value is >= DigitZero and <= DigitNine;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsAsciiHexDigit(byte value) => HexDigits.Contains(value);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsIndentDigit(byte value) => value is >= DigitOne and <= DigitNine;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsC1Control(int value) =>
-        value is >= C1ControlFirstSecondByte and <= C1ControlLastSecondByte;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsNonPrintableCodePoint(int value) =>
-        IsC1Control(value)
-        || value
-            is LineSeparator
-                or ParagraphSeparator
-                or ByteOrderMark
-                or NonCharacterFffe
-                or NonCharacterFfff;
-
     // Characters an escape sequence produces
     public const byte Bell = (byte)'\a';
     public const byte Backspace = (byte)'\b';
@@ -144,29 +118,8 @@ internal static partial class YamlSyntax
     public const char NonCharacterFffe = (char)0xfffe;
     public const char NonCharacterFfff = (char)0xffff;
 
-    public static class EscapeLetter
-    {
-        // The letter after the backslash of a double-quoted escape sequence
-        public const byte NullCharacter = (byte)'0';
-        public const byte Bell = (byte)'a';
-        public const byte Backspace = (byte)'b';
-        public const byte Tab = (byte)'t';
-        public const byte LineFeed = (byte)'n';
-        public const byte VerticalTab = (byte)'v';
-        public const byte FormFeed = (byte)'f';
-        public const byte CarriageReturn = (byte)'r';
-        public const byte EscapeControlCharacter = (byte)'e';
-        public const byte Hex2Digits = (byte)'x';
-        public const byte Hex4Digits = (byte)'u';
-        public const byte Hex8Digits = (byte)'U';
-        public const byte NextLine = (byte)'N';
-        public const byte NoBreakSpace = (byte)'_';
-        public const byte LineSeparator = (byte)'L';
-        public const byte ParagraphSeparator = (byte)'P';
-    }
-
-    // The prefixes of the hexadecimal and octal integers of the YAML 1.2 core schema ("0x1F", "0o14") and of the binary
-    // integers of YAML 1.1 ("0b101").
+    // The prefixes of the hexadecimal and octal integers of the YAML 1.2 core schema ("0x1F", "0o14")
+    // and of the binary integers of YAML 1.1 ("0b101").
     // The other YAML 1.1 forms are not numbers here: "0755" is the decimal 755, not an octal,
     // and "190:20:30" is a string. The underscores that YAML 1.1 allows between digits ("1_000") are read.
     public static ReadOnlySpan<byte> BinaryPrefixUtf8 => "0b"u8;
@@ -186,97 +139,11 @@ internal static partial class YamlSyntax
 
     public static ReadOnlySpan<byte> DocumentEndUtf8 => "..."u8;
 
-    // Plain scalars use the YAML 1.1 boolean spellings.
-    // YAML 1.1 booleans include y/n, yes/no and on/off: https://yaml.org/type/bool.html
-    // Keep its exact spellings here, shared by scalar reading and string quoting; arbitrary mixed case is a string.
-    public static bool TryParseBooleanScalar(ReadOnlySpan<byte> text, out bool value)
-    {
-        if (text.IsEmpty || (text[0] | 0x20) is not ('t' or 'y' or 'o' or 'f' or 'n'))
-        {
-            value = default;
-
-            return false;
-        }
-
-        value =
-            text.SequenceEqual("true"u8)
-            || text.SequenceEqual("True"u8)
-            || text.SequenceEqual("TRUE"u8)
-            || text.SequenceEqual("y"u8)
-            || text.SequenceEqual("Y"u8)
-            || text.SequenceEqual("yes"u8)
-            || text.SequenceEqual("Yes"u8)
-            || text.SequenceEqual("YES"u8)
-            || text.SequenceEqual("on"u8)
-            || text.SequenceEqual("On"u8)
-            || text.SequenceEqual("ON"u8);
-
-        return value
-            || text.SequenceEqual("false"u8)
-            || text.SequenceEqual("False"u8)
-            || text.SequenceEqual("FALSE"u8)
-            || text.SequenceEqual("n"u8)
-            || text.SequenceEqual("N"u8)
-            || text.SequenceEqual("no"u8)
-            || text.SequenceEqual("No"u8)
-            || text.SequenceEqual("NO"u8)
-            || text.SequenceEqual("off"u8)
-            || text.SequenceEqual("Off"u8)
-            || text.SequenceEqual("OFF"u8);
-    }
-
-    public static bool IsNullScalar(ReadOnlySpan<byte> text) =>
-        text.IsEmpty
-        || text.SequenceEqual("null"u8)
-        || text.SequenceEqual("Null"u8)
-        || text.SequenceEqual("NULL"u8)
-        || text.SequenceEqual("~"u8);
-
-    public static bool IsSpecialFloatScalar(ReadOnlySpan<byte> text)
-    {
-        return text.Length switch
-        {
-            4 => text[0] is Dot
-                && (
-                    text.SequenceEqual(".inf"u8)
-                    || text.SequenceEqual(".Inf"u8)
-                    || text.SequenceEqual(".INF"u8)
-                    || text.SequenceEqual(".nan"u8)
-                    || text.SequenceEqual(".NaN"u8)
-                    || text.SequenceEqual(".NAN"u8)
-                ),
-            5 => text[0] is Plus or Dash
-                && (
-                    text[1..].SequenceEqual(".inf"u8)
-                    || text[1..].SequenceEqual(".Inf"u8)
-                    || text[1..].SequenceEqual(".INF"u8)
-                ),
-            _ => false,
-        };
-    }
-
     // Used to tell the sign and the kind of a special float apart (compared ignoring case).
     public static ReadOnlySpan<byte> NegativeInfinityPrefixUtf8 => "-."u8;
     public static ReadOnlySpan<byte> InfinitySuffixUtf8 => "inf"u8;
     public static ReadOnlySpan<byte> PositiveInfinitySuffixUtf8 => ".inf"u8;
     public static ReadOnlySpan<byte> NotANumberSuffixUtf8 => ".nan"u8;
-
-    // Quote YAML 1.1 reserved words conservatively
-    // Including mixed-case boolean words and the merge and value keys.
-    // Boolean resolution accepts only the exact spellings above, merge and value keys remain strings here.
-    // YAML 1.1 reserved words are ASCII; compare their UTF-8 directly without decoding each candidate string.
-    public static bool IsYaml11ReservedWord(ReadOnlySpan<byte> text) =>
-        text.Length switch
-        {
-            1 => Ascii.EqualsIgnoreCase(text, "y"u8)
-                || Ascii.EqualsIgnoreCase(text, "n"u8)
-                || text.SequenceEqual("="u8),
-            2 => Ascii.EqualsIgnoreCase(text, "no"u8)
-                || Ascii.EqualsIgnoreCase(text, "on"u8)
-                || text.SequenceEqual("<<"u8),
-            3 => Ascii.EqualsIgnoreCase(text, "yes"u8) || Ascii.EqualsIgnoreCase(text, "off"u8),
-            _ => false,
-        };
 
     public static ReadOnlySpan<byte> EmptySequenceUtf8 => "[]"u8;
     public static ReadOnlySpan<byte> EmptyMappingUtf8 => "{}"u8;
@@ -289,6 +156,166 @@ internal static partial class YamlSyntax
 
     public static ReadOnlySpan<byte> WhiteSpace => " \t"u8;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsAsciiDigit(byte value) => value is >= DigitZero and <= DigitNine;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsAsciiHexDigit(byte value) => HexDigits.Contains(value);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsDigit(byte value, bool hexadecimal) =>
+        hexadecimal ? IsAsciiHexDigit(value) : IsAsciiDigit(value);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsIndentDigit(byte value) => value is >= DigitOne and <= DigitNine;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsC1Control(int value) =>
+        value is >= C1ControlFirstSecondByte and <= C1ControlLastSecondByte;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsLineEnd(byte value) => value is CarriageReturn or LineFeed;
+
+    // Trivia scanning must use the same four bytes as IsWhiteSpaceOrLineEnd; other Unicode spaces are content.
+    public static readonly SearchValues<byte> WhiteSpaceOrLineEndBytes = SearchValues.Create([
+        Space,
+        Tab,
+        CarriageReturn,
+        LineFeed,
+    ]);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsWhiteSpaceOrLineEnd(byte value) =>
+        value is Space or Tab or CarriageReturn or LineFeed;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsWhiteSpaceOrLineEnd(char value) =>
+        value <= byte.MaxValue && IsWhiteSpaceOrLineEnd((byte)value);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsFlowIndicator(byte value)
+    {
+        return value
+            is FlowSeparator
+            or FlowSequenceStart
+            or FlowSequenceEnd
+            or FlowMappingStart
+            or FlowMappingEnd;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsNonPrintableCodePoint(int value)
+    {
+        return IsC1Control(value)
+               || value
+                   is LineSeparator
+                   or ParagraphSeparator
+                   or ByteOrderMark
+                   or NonCharacterFffe
+                   or NonCharacterFfff;
+    }
+
+    // Plain scalars use the YAML 1.1 boolean spellings.
+    // YAML 1.1 booleans include y/n, yes/no and on/off: https://yaml.org/type/bool.html
+    // Keep its exact spellings here, shared by scalar reading and string quoting; arbitrary mixed case is a string.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool IsBooleanScalarStart(byte value) =>
+        (value | 0x20) is (byte)'t' or (byte)'y' or (byte)'o' or (byte)'f' or (byte)'n';
+
+    public static bool TryParseBooleanScalar(ReadOnlySpan<byte> text, out bool value)
+    {
+        if (text.IsEmpty || !IsBooleanScalarStart(text[0]))
+        {
+            value = default;
+
+            return false;
+        }
+
+        value = text.Length switch
+        {
+            1 => text.SequenceEqual("y"u8) || text.SequenceEqual("Y"u8),
+            2 => text.SequenceEqual("on"u8)
+                 || text.SequenceEqual("On"u8)
+                 || text.SequenceEqual("ON"u8),
+            3 => text.SequenceEqual("yes"u8)
+                 || text.SequenceEqual("Yes"u8)
+                 || text.SequenceEqual("YES"u8),
+            4 => text.SequenceEqual("true"u8)
+                 || text.SequenceEqual("True"u8)
+                 || text.SequenceEqual("TRUE"u8),
+            _ => false,
+        };
+
+        return value
+               || (
+                   text.Length switch
+                   {
+                       1 => text.SequenceEqual("n"u8) || text.SequenceEqual("N"u8),
+                       2 => text.SequenceEqual("no"u8)
+                            || text.SequenceEqual("No"u8)
+                            || text.SequenceEqual("NO"u8),
+                       3 => text.SequenceEqual("off"u8)
+                            || text.SequenceEqual("Off"u8)
+                            || text.SequenceEqual("OFF"u8),
+                       5 => text.SequenceEqual("false"u8)
+                            || text.SequenceEqual("False"u8)
+                            || text.SequenceEqual("FALSE"u8),
+                       _ => false,
+                   }
+               );
+    }
+
+    public static bool IsNullScalar(ReadOnlySpan<byte> text) =>
+        text.Length switch
+        {
+            0 => true,
+            1 => text[0] == (byte)'~',
+            4 => text.SequenceEqual("null"u8)
+                 || text.SequenceEqual("Null"u8)
+                 || text.SequenceEqual("NULL"u8),
+            _ => false,
+        };
+
+    public static bool IsSpecialFloatScalar(ReadOnlySpan<byte> text)
+    {
+        return text.Length switch
+        {
+            4 => text[0] is Dot
+                 && (
+                     text.SequenceEqual(".inf"u8)
+                     || text.SequenceEqual(".Inf"u8)
+                     || text.SequenceEqual(".INF"u8)
+                     || text.SequenceEqual(".nan"u8)
+                     || text.SequenceEqual(".NaN"u8)
+                     || text.SequenceEqual(".NAN"u8)
+                 ),
+            5 => text[0] is Plus or Dash
+                 && (
+                     text[1..].SequenceEqual(".inf"u8)
+                     || text[1..].SequenceEqual(".Inf"u8)
+                     || text[1..].SequenceEqual(".INF"u8)
+                 ),
+            _ => false,
+        };
+    }
+
+    // Quote YAML 1.1 reserved words conservatively
+    // Including mixed-case boolean words and the merge and value keys.
+    // Boolean resolution accepts only the exact spellings above, merge and value keys remain strings here.
+    // YAML 1.1 reserved words are ASCII; compare their UTF-8 directly without decoding each candidate string.
+    public static bool IsYaml11ReservedWord(ReadOnlySpan<byte> text) =>
+        text.Length switch
+        {
+            1 => Ascii.EqualsIgnoreCase(text, "y"u8)
+                 || Ascii.EqualsIgnoreCase(text, "n"u8)
+                 || text.SequenceEqual("="u8),
+            2 => Ascii.EqualsIgnoreCase(text, "no"u8)
+                 || Ascii.EqualsIgnoreCase(text, "on"u8)
+                 || text.SequenceEqual("<<"u8),
+            3 => Ascii.EqualsIgnoreCase(text, "yes"u8) || Ascii.EqualsIgnoreCase(text, "off"u8),
+            _ => false,
+        };
+
     // The only characters that can end a plain scalar
     //   - line break
     //   - "#" of a comment
@@ -300,6 +327,9 @@ internal static partial class YamlSyntax
         CommentIndicator,
         MappingValueIndicator,
     ]);
+
+    // A plain block-map key needs closer inspection only at a separator, comment, or line end.
+    public static readonly SearchValues<byte> BlockMapKeyStops = PlainBlockStops;
 
     public static readonly SearchValues<byte> PlainFlowStops = SearchValues.Create([
         CarriageReturn,
@@ -336,6 +366,10 @@ internal static partial class YamlSyntax
         ReservedBacktickIndicator,
     ]);
 
+    public static readonly SearchValues<byte> PlainAsciiSafeBytes = SearchValues.Create(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-./"u8
+    );
+
     public static readonly SearchValues<byte> DashDigitDot = SearchValues.Create([
         Dash,
         Dot,
@@ -351,6 +385,12 @@ internal static partial class YamlSyntax
         (byte)'9',
     ]);
 
+    // A core-schema number cannot contain bytes outside this set; use it to avoid UTF-16 conversion
+    // for numeric-looking strings such as "30s" that can only be written as plain text.
+    public static readonly SearchValues<byte> CoreNumberCandidateBytes = SearchValues.Create(
+        "0123456789+-.eE"u8
+    );
+
     private static readonly byte[] ExponentCharacters = [ExponentLower, ExponentUpper];
 
     public static readonly SearchValues<byte> Exponent = SearchValues.Create(ExponentCharacters);
@@ -360,61 +400,122 @@ internal static partial class YamlSyntax
     // U+0086-U+009F) and the non-characters U+FFFE and U+FFFF are these ranges. YAML cannot hold them as they are.
     public static readonly TextEscapeRange[] QuoteEscapeRanges =
     [
-        new TextEscapeRange(0x80, 5),
-        new TextEscapeRange(0x86, 26),
-        new TextEscapeRange(0xFFFE, 2),
+        new TextEscapeRange(firstCodePoint: 0x80, length: 5),
+        new TextEscapeRange(firstCodePoint: 0x86, length: 26),
+        new TextEscapeRange(firstCodePoint: 0xFFFE, length: 2),
     ];
+
+    // The escapes a quoted YAML string needs independent of the serializer settings.
+    // C0 controls and the quote characters (always escaped by the JSON encoder) and the characters YAML cannot hold:
+    //   * DEL
+    //   * C1 controls (U+0080-U+0084 and U+0086-U+009F)
+    //   * Non-characters U+FFFE and U+FFFF.
+    //
+    // The text encoder policy of the settings is deliberately not used.
+    public static readonly JsonTextEncoder QuoteEncoder = new TextEncoderPolicy(
+        QuoteEscapeRanges,
+        TextEscapeMask.Delete
+    ).GetEncoder<JsonTextEncoder>();
+
+    public static class EscapeLetter
+    {
+        // The letter after the backslash of a double-quoted escape sequence
+        public const byte NullCharacter = (byte)'0';
+        public const byte Bell = (byte)'a';
+        public const byte Backspace = (byte)'b';
+        public const byte Tab = (byte)'t';
+        public const byte LineFeed = (byte)'n';
+        public const byte VerticalTab = (byte)'v';
+        public const byte FormFeed = (byte)'f';
+        public const byte CarriageReturn = (byte)'r';
+        public const byte EscapeControlCharacter = (byte)'e';
+        public const byte Hex2Digits = (byte)'x';
+        public const byte Hex4Digits = (byte)'u';
+        public const byte Hex8Digits = (byte)'U';
+        public const byte NextLine = (byte)'N';
+        public const byte NoBreakSpace = (byte)'_';
+        public const byte LineSeparator = (byte)'L';
+        public const byte ParagraphSeparator = (byte)'P';
+    }
 
     // UTF-8 ASCII controls can be searched as bytes; non-ASCII characters require their complete UTF-8 sequences.
     public static readonly SearchValues<byte> NonPrintableAscii = CreateNonPrintableAscii();
 
     private static SearchValues<byte> CreateNonPrintableAscii()
     {
-        var characters = new List<byte>();
+        Span<byte> characters = stackalloc byte[Space + 1];
         for (var c = 0; c < Space; c++)
         {
-            characters.Add((byte)c);
+            characters[c] = (byte)c;
         }
 
-        characters.Add(Delete);
+        characters[Space] = Delete;
 
-        return SearchValues.Create(characters.ToArray());
+        return SearchValues.Create(characters);
     }
 
-    // The caller must validate UTF-8 first. Search ASCII controls as bytes, but compare non-ASCII characters by
-    // code point, never by continuation byte, so the existing prohibited-character set keeps its meaning.
+    /// <summary>
+    /// Search ASCII control characters.
+    /// Compare non-ASCII characters by code point, never by continuation byte
+    /// so the existing prohibited-character set keeps its meaning.
+    /// </summary>
+    /// <remarks>
+    /// The caller must validate UTF-8 first.
+    /// </remarks>
+    /// <param name="value"></param>
+    /// <returns></returns>
     public static bool ContainsNonPrintableCharacters(ReadOnlySpan<byte> value)
     {
-        if (value.ContainsAny(NonPrintableAscii))
+        // Printable ASCII needs only one scan; most YAML keys and scalar values take this path.
+        return value.IndexOfAnyExceptInRange(Space, (byte)(Delete - 1)) >= 0
+               && (
+                   value.ContainsAny(NonPrintableAscii) || ContainsNonPrintableUnicodeCharacters(value)
+               );
+
+        static bool ContainsNonPrintableUnicodeCharacters(ReadOnlySpan<byte> value)
         {
-            return true;
-        }
-
-        var remaining = value;
-        int nonAsciiOffset;
-        while ((nonAsciiOffset = remaining.IndexOfAnyExceptInRange(NoCharacter, Delete)) >= 0)
-        {
-            remaining = remaining[nonAsciiOffset..];
-
-            Rune.DecodeFromUtf8(remaining, out var character, out var consumed);
-
-            // ASCII controls were checked above; preserve the same C1 and non-printable code points.
-            if (IsNonPrintableCodePoint(character.Value))
+            var remaining = value;
+            int nonAsciiOffset;
+            while ((nonAsciiOffset = remaining.IndexOfAnyExceptInRange(NoCharacter, Delete)) >= 0)
             {
-                return true;
+                remaining = remaining[nonAsciiOffset..];
+
+                Rune.DecodeFromUtf8(remaining, out var character, out var consumed);
+
+                // ASCII controls were checked by the caller; preserve the same C1 and non-printable code points.
+                if (IsNonPrintableCodePoint(character.Value))
+                {
+                    return true;
+                }
+
+                remaining = remaining[consumed..];
             }
 
-            remaining = remaining[consumed..];
+            return false;
         }
-
-        return false;
     }
 
-    // Decode Unicode characters without allocating a string; C1 controls occupy more than one UTF-8 byte.
     public static bool ContainsUnrepresentableBlockScalarCharacters(ReadOnlySpan<byte> value)
     {
-        if (!value.ContainsAny(NonPrintableAscii) && Ascii.IsValid(value))
+        if (Ascii.IsValid(value))
         {
+            // Multiline ASCII commonly contains LF, so skip allowed bytes without decoding each one as a Rune.
+            while (!value.IsEmpty)
+            {
+                var invalidRange = value.IndexOfAnyExceptInRange(Space, (byte)(Delete - 1));
+                if (invalidRange < 0)
+                {
+                    break;
+                }
+
+                if (value[invalidRange] is not (LineFeed or Tab))
+                {
+                    return true;
+                }
+
+                value = value[(invalidRange + 1)..];
+            }
+
             return false;
         }
 
@@ -426,7 +527,7 @@ internal static partial class YamlSyntax
             if (
                 character.Value
                 is (< Space or >= Delete and <= C1ControlLastSecondByte)
-                    and not (LineFeed or Tab)
+                and not (LineFeed or Tab)
             )
             {
                 return true;
@@ -436,28 +537,5 @@ internal static partial class YamlSyntax
         }
 
         return false;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsFlowIndicator(byte value)
-    {
-        return value
-            is FlowSeparator
-                or FlowSequenceStart
-                or FlowSequenceEnd
-                or FlowMappingStart
-                or FlowMappingEnd;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsWhiteSpaceOrLineEnd(byte value)
-    {
-        return value is Space or Tab or CarriageReturn or LineFeed;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsWhiteSpaceOrLineEnd(char value)
-    {
-        return value <= byte.MaxValue && IsWhiteSpaceOrLineEnd((byte)value);
     }
 }

@@ -1,6 +1,8 @@
+﻿using System;
+
 namespace REDox.Yaml.Tests;
 
-public sealed partial class YamlSpecConformanceTest
+public sealed partial class ConformanceTest
 {
     [Theory]
     [InlineData("&anchor value", "UnsupportedFeature")]
@@ -30,20 +32,23 @@ public sealed partial class YamlSpecConformanceTest
     [InlineData("a: - b\n", "InvalidFormat")]
     public void UnsupportedOrMalformedSyntax_FailsParsing(string yaml, string expectedCode)
     {
-        YamlTestHelper.AssertYamlParseError(() => YamlDocument.Parse(yaml), expectedCode);
+        YamlTestFixture.AssertYamlParseError(() => YamlDocument.Parse(yaml), expectedCode);
     }
 
     [Fact]
     public void InvalidUtf8_TryParseReturnsFalse()
     {
-        Assert.False(YamlDocument.TryParse([0x61, 0x3a, 0x20, 0xff], out var document));
+        Assert.False(
+            YamlDocument.TryParse(new Memory<byte>([0x61, 0x3a, 0x20, 0xff]), out var document)
+        );
+
         Assert.Null(document);
     }
 
     [Fact]
     public void ExceededDepthLimit_FailsParsing()
     {
-        YamlTestHelper.AssertYamlParseError(
+        YamlTestFixture.AssertYamlParseError(
             static () =>
                 YamlDocument.Parse("[[1]]", options: new YamlDocumentOptions { MaxDepth = 1 }),
             "MaxDepthExceeded"
@@ -60,7 +65,7 @@ public sealed partial class YamlSpecConformanceTest
     {
         var options = new YamlDocumentOptions { EnableValueValidation = true };
 
-        YamlTestHelper.AssertYamlParseError(
+        YamlTestFixture.AssertYamlParseError(
             () => YamlDocument.Parse(yaml, options: options),
             "InvalidString"
         );
@@ -69,7 +74,7 @@ public sealed partial class YamlSpecConformanceTest
     [Fact]
     public void DuplicateKeys_ValidationRejects()
     {
-        YamlTestHelper.AssertYamlParseError(
+        YamlTestFixture.AssertYamlParseError(
             static () =>
                 YamlDocument.Parse(
                     "a: 1\na: 2\n",
@@ -84,7 +89,7 @@ public sealed partial class YamlSpecConformanceTest
     {
         var value = DValue.Create("a\rb").AsElement();
 
-        YamlTestHelper.AssertYamlParseError(
+        YamlTestFixture.AssertYamlParseError(
             () =>
                 YamlDocument.EncodeToString(
                     value,

@@ -1,8 +1,9 @@
+﻿using System;
 using System.Text.Json;
 
 namespace REDox.Yaml.Tests;
 
-public sealed class YamlStringsTest
+public sealed class StringTest
 {
     [Theory]
     [InlineData("'it''s fine'", "it's fine")]
@@ -44,7 +45,7 @@ public sealed class YamlStringsTest
     public void StringStyles_PreserveValue(string value)
     {
         var source = DValue.Create(value).AsElement();
-        foreach (var mode in new[] { YamlStringStyle.Quote, YamlStringStyle.Multiline })
+        foreach (var mode in Enum.GetValues<YamlStringStyle>())
         {
             var yaml = YamlDocument.EncodeToString(
                 source,
@@ -148,7 +149,7 @@ public sealed class YamlStringsTest
     [InlineData(0xfeff, false)]
     [InlineData(0xa0, false)]
     [InlineData(0x3000, false)]
-    public void SpecialCharacterInQuotedString_EscapesWhenRequiredAndRoundTrips(
+    public void SpecialCharacterInString_EscapesWhenRequiredAndRoundTrips(
         int codePoint,
         bool escaped
     )
@@ -184,18 +185,18 @@ public sealed class YamlStringsTest
         Assert.Equal(1, convertedYamlDocument.RootElement.GetProperty(key).GetInt64());
     }
 
-    // A block scalar cannot hold DEL or the C1 controls: the multiline mode refuses them rather than writing a
-    // string that would come back different.
+    // A block scalar cannot hold DEL or the C1 controls.
+    // multiline mode refuses them rather than writing a string that would come back different.
     [Theory]
     [InlineData(0x7f)]
     [InlineData(0x80)]
     [InlineData(0x85)]
     [InlineData(0x9f)]
-    public void ControlCharacterWithMultilineStyle_Throws(int codePoint)
+    public void DelAndC1ControlsWithMultilineStyle_RejectBlockScalar(int codePoint)
     {
         var value = "a" + (char)codePoint + "b";
 
-        YamlTestHelper.AssertYamlParseError(
+        YamlTestFixture.AssertYamlParseError(
             () =>
                 YamlDocument.EncodeToString(
                     DValue.Create(value).AsElement(),
@@ -224,13 +225,13 @@ public sealed class YamlStringsTest
         Assert.Equal(value, parsed.RootElement.GetString());
     }
 
-    // An isolated surrogate is not text: UTF-8 cannot hold it, so it is written as the replacement character. The
-    // document stays valid and the rest of the string is untouched.
     [Theory]
     [InlineData(0xd800)]
     [InlineData(0xdc00)]
     [InlineData(0xdfff)]
-    public void IsolatedSurrogate_WritesAsReplacementCharacter(int surrogate)
+    public void IsolatedSurrogate_WritesReplacementCharacterAndPreservesSurroundingText(
+        int surrogate
+    )
     {
         var value = "a" + (char)surrogate + "b";
 
@@ -238,6 +239,9 @@ public sealed class YamlStringsTest
 
         using var parsed = YamlDocument.Parse(yaml);
 
+        // An isolated surrogate is not text.
+        // UTF-8 cannot hold it, so it is written as the replacement character.
+        // Document stays valid and the rest of the string is untouched.
         Assert.Equal("a" + (char)0xfffd + "b", parsed.RootElement.GetString());
     }
 
@@ -272,13 +276,13 @@ public sealed class YamlStringsTest
     [Fact]
     public void DisposedOriginal_DuplicateRetainsStrings()
     {
-        using var duplicate = Duplicate("a: \"one\"\nb: |\n  two\n");
+        using var duplicate = GetDuplicateOfDisposedOriginal("a: \"one\"\nb: |\n  two\n");
 
         Assert.Equal("one", duplicate.RootElement.GetProperty("a").GetString());
         Assert.Equal("two\n", duplicate.RootElement.GetProperty("b").GetString());
     }
 
-    private static YamlDocument Duplicate(string yaml)
+    private static YamlDocument GetDuplicateOfDisposedOriginal(string yaml)
     {
         using var original = YamlDocument.Parse(yaml);
 
