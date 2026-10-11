@@ -29,14 +29,14 @@ public sealed partial class YamlDocument
     // Whether a plain value is a timestamp is decided by YamlTimestampHelper.
     // The text is stored exactly as it was written (see WriteTimestamp),
     // so nothing is normalized when the document is read.
-    private bool TryParseTimestamp(ParsedScalar scalar, out uint tokenId)
+    private bool TryCreateTimestampToken(ParsedScalarIntermediate scalar, out uint tokenId)
     {
         tokenId = 0;
 
         var text = _utf8TextForTokens.GetWrittenSpanFromOffset(scalar.Start);
         if (
             !TimestampHelper.StartsLikeTimestamp(text)
-            || !TimestampHelper.TryGetKind(Encoding.UTF8.GetString(text), out var kind)
+            || !TimestampHelper.TryParseTimestampKind(Encoding.UTF8.GetString(text), out var kind)
         )
         {
             return false;
@@ -58,7 +58,7 @@ public sealed partial class YamlDocument
             variant = DTokenVariant.TimestampOffsetDateTime;
         }
 
-        tokenId = CreateTokenForParsedScalar(variant, scalar);
+        tokenId = CreateTokenFromParsedScalar(variant, scalar);
 
         return true;
     }

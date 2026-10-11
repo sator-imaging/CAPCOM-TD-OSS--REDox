@@ -44,15 +44,17 @@ public sealed partial class YamlDocument
 
     private bool ConsumeLineEnd()
     {
-        if (_position >= Source.Length || !YamlSyntax.IsLineEnd(Source[_position]))
+        // CRLF checks touch the same input several times, so keep one span for this line break.
+        var source = Source;
+        if (_position >= source.Length || !YamlSyntax.IsLineEnd(source[_position]))
         {
             return false;
         }
 
         if (
-            Source[_position++] == YamlSyntax.CarriageReturn
-            && _position < Source.Length
-            && Source[_position] == YamlSyntax.LineFeed
+            source[_position++] == YamlSyntax.CarriageReturn
+            && _position < source.Length
+            && source[_position] == YamlSyntax.LineFeed
         )
         {
             _position++;
@@ -64,7 +66,7 @@ public sealed partial class YamlDocument
     private void SkipToLineEnd()
     {
         var remaining = Source[_position..];
-        var lineEnd = remaining.IndexOfAny(YamlSyntax.CarriageReturn, YamlSyntax.LineFeed);
+        var lineEnd = remaining.IndexOfAny(YamlSyntax.LineEndBytes);
 
         _position += lineEnd < 0 ? remaining.Length : lineEnd;
     }
@@ -82,6 +84,8 @@ public sealed partial class YamlDocument
         // Trivia scanning only advances the cursor.
         var source = Source;
         var preserveTrivia = _parseOptions.PreserveTrivia;
+        var checkedCommentStart = -1;
+        var canAttachCheckedComment = false;
 
         while (_position < source.Length)
         {
@@ -93,19 +97,26 @@ public sealed partial class YamlDocument
                 var nextContent = remaining.IndexOfAnyExcept(YamlSyntax.WhiteSpaceOrLineEndBytes);
                 _position += nextContent < 0 ? remaining.Length : nextContent;
 
-                if (
-                    preserveTrivia
-                    && !(
+                if (preserveTrivia)
+                {
+                    // The next iteration examines this same comment, so keep its ownership check once.
+                    checkedCommentStart =
                         _position < source.Length
                         && source[_position] == YamlSyntax.CommentIndicator
-                        && CanAttachTrailingComment(_position)
-                    )
-                )
-                {
-                    CreateTriviaTokenFromUtf8Text(
-                        DTokenVariant.TriviaWhitespace,
-                        source[start.._position]
-                    );
+                            ? _position
+                            : -1;
+
+                    canAttachCheckedComment =
+                        checkedCommentStart >= 0
+                        && ShouldAttachTrailingCommentToLastNode(checkedCommentStart);
+
+                    if (!canAttachCheckedComment)
+                    {
+                        CreateTriviaTokenFromUtf8Text(
+                            DTokenVariant.TriviaWhitespace,
+                            source[start.._position]
+                        );
+                    }
                 }
             }
             else if (source[_position] == YamlSyntax.CommentIndicator)
@@ -120,7 +131,11 @@ public sealed partial class YamlDocument
                 var attachToNode =
                     preserveTrivia
                     && !leaveSameLineCommentForNextNode
-                    && CanAttachTrailingComment(start);
+                    && (
+                        checkedCommentStart == start
+                            ? canAttachCheckedComment
+                            : ShouldAttachTrailingCommentToLastNode(start)
+                    );
 
                 SkipToLineEnd();
 
@@ -135,7 +150,7 @@ public sealed partial class YamlDocument
                         // Keep the comment with the value it follows so moving the next node cannot move it.
                         _trailingCommentsByNodeId.Add(
                             _lastParsedNodeId,
-                            StoreTrailingComment(source[whitespaceStart.._position])
+                            CreateTrailingComment(source[whitespaceStart.._position])
                         );
                     }
                     else
@@ -154,7 +169,7 @@ public sealed partial class YamlDocument
         }
     }
 
-    private bool CanAttachTrailingComment(int commentStart)
+    private bool ShouldAttachTrailingCommentToLastNode(int commentStart)
     {
         if (!_parseOptions.PreserveTrivia || _lastParsedNodeId == 0)
         {
@@ -232,7 +247,7 @@ public sealed partial class YamlDocument
 
                 _trailingCommentsByNodeId.Add(
                     ownerId,
-                    StoreTrailingComment(Source[whitespaceStart.._position])
+                    CreateTrailingComment(Source[whitespaceStart.._position])
                 );
             }
             else
@@ -262,18 +277,20 @@ public sealed partial class YamlDocument
         var lineStart = position;
         while (position < source.Length)
         {
-            var indent = CountIndent(lineStart);
-            position = Math.Max(position, lineStart + indent);
-
-            if (position >= source.Length)
+            // Lookahead already holds the input span, so avoid reacquiring it for every skipped line.
+            var indent = source[lineStart..].IndexOfAnyExcept(YamlSyntax.Space);
+            if (indent < 0)
             {
-                return (position, -1);
+                return (source.Length, -1);
             }
 
-            // CountIndent already reached the content on space-indented lines. Only tabs or spaces after
-            // the current position need another scan; a tab-only line is still blank, not scalar content.
+            // Each pass starts at lineStart, and indentation can only advance that position.
+            position = lineStart + indent;
+
+            // The indent scan stops at the first non-space byte, so only tabs can need another scan.
+            // A tab-only line is still blank, not scalar content.
             var contentStart = position;
-            if (source[position] is YamlSyntax.Space or YamlSyntax.Tab)
+            if (source[position] == YamlSyntax.Tab)
             {
                 var remaining = source[position..];
                 var firstNonSpace = remaining.IndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab);
@@ -292,8 +309,7 @@ public sealed partial class YamlDocument
             {
                 position = contentStart;
 
-                var lineEnd = source[position..]
-                    .IndexOfAny(YamlSyntax.CarriageReturn, YamlSyntax.LineFeed);
+                var lineEnd = source[position..].IndexOfAny(YamlSyntax.LineEndBytes);
 
                 position = lineEnd < 0 ? source.Length : position + lineEnd;
 
@@ -375,8 +391,7 @@ public sealed partial class YamlDocument
                 var index = 0;
                 while (index < whitespace.Length)
                 {
-                    var nextBreak = whitespace[index..]
-                        .IndexOfAny(YamlSyntax.CarriageReturn, YamlSyntax.LineFeed);
+                    var nextBreak = whitespace[index..].IndexOfAny(YamlSyntax.LineEndBytes);
 
                     if (nextBreak < 0)
                     {

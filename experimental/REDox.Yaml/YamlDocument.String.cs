@@ -15,7 +15,7 @@ public sealed partial class YamlDocument
         return GetUtf8TextForToken(token);
     }
 
-    private ParsedScalar ParseDoubleQuotedString(int parentIndent)
+    private ParsedScalarIntermediate ReadDoubleQuotedString(int parentIndent)
     {
         // Escape handling advances the cursor but does not replace the input buffer.
         var source = Source;
@@ -29,6 +29,38 @@ public sealed partial class YamlDocument
 
         while (_position < source.Length)
         {
+            // Most quoted text needs no special handling; append its bytes together to avoid a buffer call per byte.
+            var plainStart = _position;
+
+            // Nothing observes the parser cursor until this plain run ends, so advance a local position.
+            var plainEnd = plainStart;
+            while (plainEnd < source.Length)
+            {
+                var plainByte = source[plainEnd];
+                if (
+                    plainByte
+                    is < YamlSyntax.Space
+                    or YamlSyntax.DoubleQuote
+                    or YamlSyntax.Backslash
+                    or YamlSyntax.Delete
+                    or YamlSyntax.C1ControlLeadByte
+                )
+                {
+                    break;
+                }
+
+                plainEnd++;
+            }
+
+            _position = plainEnd;
+
+            if (_position > plainStart)
+            {
+                _utf8TextForTokens.Append(source[plainStart.._position]);
+
+                continue;
+            }
+
             var current = source[_position++];
             if (current == YamlSyntax.DoubleQuote)
             {
@@ -63,162 +95,167 @@ public sealed partial class YamlDocument
 
             current = source[_position++];
 
-            switch (current)
+            EscapeCharacter(source);
+
+            void EscapeCharacter(ReadOnlySpan<byte> source)
             {
-                case YamlSyntax.EscapeLetter.NullCharacter:
-                    _utf8TextForTokens.Append(YamlSyntax.NoCharacter);
+                switch (current)
+                {
+                    case YamlSyntax.EscapeLetter.NullCharacter:
+                        _utf8TextForTokens.Append(YamlSyntax.NoCharacter);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.Bell:
-                    _utf8TextForTokens.Append(YamlSyntax.Bell);
+                    case YamlSyntax.EscapeLetter.Bell:
+                        _utf8TextForTokens.Append(YamlSyntax.Bell);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.Backspace:
-                    _utf8TextForTokens.Append(YamlSyntax.Backspace);
+                    case YamlSyntax.EscapeLetter.Backspace:
+                        _utf8TextForTokens.Append(YamlSyntax.Backspace);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.Tab:
-                case YamlSyntax.Tab:
-                    _utf8TextForTokens.Append(YamlSyntax.Tab);
+                    case YamlSyntax.EscapeLetter.Tab:
+                    case YamlSyntax.Tab:
+                        _utf8TextForTokens.Append(YamlSyntax.Tab);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.LineFeed:
-                    _utf8TextForTokens.Append(YamlSyntax.LineFeed);
+                    case YamlSyntax.EscapeLetter.LineFeed:
+                        _utf8TextForTokens.Append(YamlSyntax.LineFeed);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.VerticalTab:
-                    _utf8TextForTokens.Append(YamlSyntax.VerticalTab);
+                    case YamlSyntax.EscapeLetter.VerticalTab:
+                        _utf8TextForTokens.Append(YamlSyntax.VerticalTab);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.FormFeed:
-                    _utf8TextForTokens.Append(YamlSyntax.FormFeed);
+                    case YamlSyntax.EscapeLetter.FormFeed:
+                        _utf8TextForTokens.Append(YamlSyntax.FormFeed);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.CarriageReturn:
-                    _utf8TextForTokens.Append(YamlSyntax.CarriageReturn);
+                    case YamlSyntax.EscapeLetter.CarriageReturn:
+                        _utf8TextForTokens.Append(YamlSyntax.CarriageReturn);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.EscapeControlCharacter:
-                    _utf8TextForTokens.Append(YamlSyntax.EscapeControlCharacter);
+                    case YamlSyntax.EscapeLetter.EscapeControlCharacter:
+                        _utf8TextForTokens.Append(YamlSyntax.EscapeControlCharacter);
 
-                    break;
+                        break;
 
-                case YamlSyntax.Space:
-                    _utf8TextForTokens.Append(YamlSyntax.Space);
+                    case YamlSyntax.Space:
+                        _utf8TextForTokens.Append(YamlSyntax.Space);
 
-                    break;
+                        break;
 
-                case YamlSyntax.DoubleQuote:
-                    _utf8TextForTokens.Append(YamlSyntax.DoubleQuote);
+                    case YamlSyntax.DoubleQuote:
+                        _utf8TextForTokens.Append(YamlSyntax.DoubleQuote);
 
-                    break;
+                        break;
 
-                case YamlSyntax.Slash:
-                    _utf8TextForTokens.Append(YamlSyntax.Slash);
+                    case YamlSyntax.Slash:
+                        _utf8TextForTokens.Append(YamlSyntax.Slash);
 
-                    break;
+                        break;
 
-                case YamlSyntax.Backslash:
-                    _utf8TextForTokens.Append(YamlSyntax.Backslash);
+                    case YamlSyntax.Backslash:
+                        _utf8TextForTokens.Append(YamlSyntax.Backslash);
 
-                    break;
+                        break;
 
-                case YamlSyntax.CarriageReturn:
-                    if (_position < source.Length && source[_position] == YamlSyntax.LineFeed)
-                    {
-                        _position++;
-                    }
+                    case YamlSyntax.CarriageReturn:
+                        if (_position < source.Length && source[_position] == YamlSyntax.LineFeed)
+                        {
+                            _position++;
+                        }
 
-                    SkipInlineSpaces();
+                        SkipInlineSpaces();
 
-                    break;
+                        break;
 
-                case YamlSyntax.LineFeed:
-                    SkipInlineSpaces();
+                    case YamlSyntax.LineFeed:
+                        SkipInlineSpaces();
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.NextLine:
-                    _utf8TextForTokens.AppendCodePoint(YamlSyntax.NextLine);
+                    case YamlSyntax.EscapeLetter.NextLine:
+                        _utf8TextForTokens.AppendCodePoint(YamlSyntax.NextLine);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.NoBreakSpace:
-                    _utf8TextForTokens.AppendCodePoint(YamlSyntax.NoBreakSpace);
+                    case YamlSyntax.EscapeLetter.NoBreakSpace:
+                        _utf8TextForTokens.AppendCodePoint(YamlSyntax.NoBreakSpace);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.LineSeparator:
-                    _utf8TextForTokens.AppendCodePoint(YamlSyntax.LineSeparator);
+                    case YamlSyntax.EscapeLetter.LineSeparator:
+                        _utf8TextForTokens.AppendCodePoint(YamlSyntax.LineSeparator);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.ParagraphSeparator:
-                    _utf8TextForTokens.AppendCodePoint(YamlSyntax.ParagraphSeparator);
+                    case YamlSyntax.EscapeLetter.ParagraphSeparator:
+                        _utf8TextForTokens.AppendCodePoint(YamlSyntax.ParagraphSeparator);
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.Hex2Digits:
-                    _utf8TextForTokens.AppendCodePoint(ParseEscapedCodePoint(digits: 2));
+                    case YamlSyntax.EscapeLetter.Hex2Digits:
+                        _utf8TextForTokens.AppendCodePoint(ReadEscapedCodePoint(digits: 2));
 
-                    break;
+                        break;
 
-                case YamlSyntax.EscapeLetter.Hex4Digits:
-                case YamlSyntax.EscapeLetter.Hex8Digits:
-                    var codePoint = ParseEscapedCodePoint(
-                        current == YamlSyntax.EscapeLetter.Hex4Digits ? 4 : 8
-                    );
+                    case YamlSyntax.EscapeLetter.Hex4Digits:
+                    case YamlSyntax.EscapeLetter.Hex8Digits:
+                        var codePoint = ReadEscapedCodePoint(
+                            current == YamlSyntax.EscapeLetter.Hex4Digits ? 4 : 8
+                        );
 
-                    if (codePoint is >= 0xd800 and <= 0xdbff)
-                    {
-                        // A high surrogate is only valid when the escape of its low surrogate follows.
-                        if (
-                            _position + 2 > source.Length
-                            || source[_position + 1] != YamlSyntax.EscapeLetter.Hex4Digits
-                            || source[_position] != YamlSyntax.Backslash
-                        )
+                        if (codePoint is >= 0xd800 and <= 0xdbff)
+                        {
+                            // A high surrogate is only valid when the escape of its low surrogate follows.
+                            if (
+                                _position + 2 > source.Length
+                                || source[_position + 1] != YamlSyntax.EscapeLetter.Hex4Digits
+                                || source[_position] != YamlSyntax.Backslash
+                            )
+                            {
+                                ThrowParseError(ParseException.ErrorCode.InvalidString);
+                            }
+
+                            _position += 2;
+
+                            var low = ReadEscapedCodePoint(digits: 4);
+                            if (low is < 0xdc00 or > 0xdfff)
+                            {
+                                ThrowParseError(ParseException.ErrorCode.InvalidString);
+                            }
+
+                            codePoint = 0x10000 + ((codePoint - 0xd800) << 10) + low - 0xdc00;
+                        }
+                        // Eight hexadecimal digits can parse as a negative int; reject them before constructing a Rune.
+                        else if (codePoint is >= 0xdc00 and <= 0xdfff or < 0 or > 0x10ffff)
                         {
                             ThrowParseError(ParseException.ErrorCode.InvalidString);
                         }
 
-                        _position += 2;
+                        _utf8TextForTokens.AppendCodePoint(codePoint);
 
-                        var low = ParseEscapedCodePoint(digits: 4);
-                        if (low is < 0xdc00 or > 0xdfff)
-                        {
-                            ThrowParseError(ParseException.ErrorCode.InvalidString);
-                        }
+                        break;
 
-                        codePoint = 0x10000 + ((codePoint - 0xd800) << 10) + low - 0xdc00;
-                    }
-                    // Eight hexadecimal digits can parse as a negative int; reject them before constructing a Rune.
-                    else if (codePoint is >= 0xdc00 and <= 0xdfff or < 0 or > 0x10ffff)
-                    {
+                    default:
                         ThrowParseError(ParseException.ErrorCode.InvalidString);
-                    }
 
-                    _utf8TextForTokens.AppendCodePoint(codePoint);
-
-                    break;
-
-                default:
-                    ThrowParseError(ParseException.ErrorCode.InvalidString);
-
-                    break;
+                        break;
+                }
             }
 
             protectedLength = _utf8TextForTokens.Length - scalar.Start;
         }
 
-        throw ParseError(ParseException.ErrorCode.InvalidString);
+        throw CreateParseError(ParseException.ErrorCode.InvalidString);
     }
 
     // Whether a byte of a quoted scalar which is neither a line break nor the start of
@@ -251,7 +288,11 @@ public sealed partial class YamlDocument
     // Folds a line break inside a quoted scalar.
     //   * One break becomes a space, N breaks become N-1 newlines.
     //   * Trailing whitespace before the break and leading whitespace after it are dropped.
-    private void FoldQuotedBreak(ParsedScalar scalar, int protectedLength, int parentIndent)
+    private void FoldQuotedBreak(
+        ParsedScalarIntermediate scalar,
+        int protectedLength,
+        int parentIndent
+    )
     {
         var protectedEnd = scalar.Start + protectedLength;
 
@@ -263,7 +304,10 @@ public sealed partial class YamlDocument
         _utf8TextForTokens.TruncateTo(end);
 
         var breaks = 0;
-        while (_position < Source.Length && YamlSyntax.IsLineEnd(Source[_position]))
+
+        // The source stays fixed during parsing, including across quoted line continuations.
+        var source = Source;
+        while (_position < source.Length && YamlSyntax.IsLineEnd(source[_position]))
         {
             ConsumeLineEnd();
 
@@ -287,6 +331,8 @@ public sealed partial class YamlDocument
     // and a document marker cannot appear inside the scalar.
     private void CheckQuotedContinuation(int parentIndent)
     {
+        // The input cannot change while checking one continuation line, so reuse its span.
+        var source = Source;
         if (IsDocumentMarkerAt(_position))
         {
             ThrowParseError(ParseException.ErrorCode.InvalidString);
@@ -294,11 +340,11 @@ public sealed partial class YamlDocument
 
         var indent = CountIndent(_position);
         var content = _position + indent;
-        var firstNonSpace = Source[content..].IndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab);
-        content = firstNonSpace < 0 ? Source.Length : content + firstNonSpace;
+        var firstNonSpace = source[content..].IndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab);
+        content = firstNonSpace < 0 ? source.Length : content + firstNonSpace;
 
         // A blank line has no indentation to check.
-        if (content >= Source.Length || YamlSyntax.IsLineEnd(Source[content]))
+        if (content >= source.Length || YamlSyntax.IsLineEnd(source[content]))
         {
             return;
         }
@@ -309,7 +355,7 @@ public sealed partial class YamlDocument
         }
     }
 
-    private int ParseEscapedCodePoint(int digits)
+    private int ReadEscapedCodePoint(int digits)
     {
         if (
             digits > Source.Length - _position
@@ -321,7 +367,7 @@ public sealed partial class YamlDocument
             )
         )
         {
-            throw ParseError(ParseException.ErrorCode.InvalidString);
+            throw CreateParseError(ParseException.ErrorCode.InvalidString);
         }
 
         _position += digits;
@@ -329,7 +375,7 @@ public sealed partial class YamlDocument
         return codePoint;
     }
 
-    private ParsedScalar ParseSingleQuotedString(int parentIndent)
+    private ParsedScalarIntermediate ReadSingleQuotedString(int parentIndent)
     {
         // Folded lines move the cursor while the source span stays fixed.
         var source = Source;
@@ -338,6 +384,37 @@ public sealed partial class YamlDocument
         var scalar = RecordScalarTextStart(quoted: true);
         while (_position < source.Length)
         {
+            // A plain run cannot affect quote doubling or line folding, so copy it with one append.
+            var plainStart = _position;
+
+            // Nothing observes the parser cursor until this plain run ends, so advance a local position.
+            var plainEnd = plainStart;
+            while (plainEnd < source.Length)
+            {
+                var plainByte = source[plainEnd];
+                if (
+                    plainByte
+                    is < YamlSyntax.Space
+                    or YamlSyntax.SingleQuote
+                    or YamlSyntax.Delete
+                    or YamlSyntax.C1ControlLeadByte
+                )
+                {
+                    break;
+                }
+
+                plainEnd++;
+            }
+
+            _position = plainEnd;
+
+            if (_position > plainStart)
+            {
+                _utf8TextForTokens.Append(source[plainStart.._position]);
+
+                continue;
+            }
+
             var current = source[_position++];
             if (current == YamlSyntax.SingleQuote)
             {
@@ -370,7 +447,7 @@ public sealed partial class YamlDocument
             }
         }
 
-        throw ParseError(ParseException.ErrorCode.InvalidString);
+        throw CreateParseError(ParseException.ErrorCode.InvalidString);
     }
 
     // Whether a flow indicator, or the ":" that separates a key from its value starts at the position.
@@ -404,7 +481,7 @@ public sealed partial class YamlDocument
     }
 
     // TODO: 200+ LoC
-    private ParsedScalar ParsePlainScalarText(bool key, bool flow, int parentIndent)
+    private ParsedScalarIntermediate ReadPlainScalarText(bool key, bool flow, int parentIndent)
     {
         // The source is immutable during scalar parsing, including folded continuations.
         var source = Source;
@@ -488,9 +565,9 @@ public sealed partial class YamlDocument
         // In a block as well as in a flow collection. Only an implicit block key has to stay on one line.
         if ((!key || flow) && _position < source.Length && YamlSyntax.IsLineEnd(source[_position]))
         {
-            ParsePlainStringContinuations(this, stops, flow, parentIndent);
+            ReadPlainStringContinuations(this, stops, flow, parentIndent);
 
-            static void ParsePlainStringContinuations(
+            static void ReadPlainStringContinuations(
                 YamlDocument document,
                 SearchValues<byte> stops,
                 bool flow,
@@ -514,9 +591,6 @@ public sealed partial class YamlDocument
                         Indent <= parentIndent
                         || Position >= Source.Length
                         || Indent == 0 && document.IsDocumentMarkerAt(Position)
-                        || Source[lineEnd..Position].Contains(YamlSyntax.CommentIndicator)
-                        // A line that starts with ",", "}" or ": " belongs to the collection, not to the scalar.
-                        || flow && document.IsFlowScalarTerminatorAt(Position)
                     )
                     {
                         _position = lineEnd;
@@ -529,11 +603,12 @@ public sealed partial class YamlDocument
                     var breaks = 0;
                     var betweenLines = Source[lineEnd..Position];
                     var breakPosition = 0;
+                    var hasComment = false;
                     while (breakPosition < betweenLines.Length)
                     {
-                        // Blank lines may carry indentation, so jump directly to their line breaks.
+                        // Check comments while counting breaks so a continuation does not scan these lines twice.
                         var nextBreak = betweenLines[breakPosition..]
-                            .IndexOfAny(YamlSyntax.CarriageReturn, YamlSyntax.LineFeed);
+                            .IndexOfAny(YamlSyntax.PlainContinuationStops);
 
                         if (nextBreak < 0)
                         {
@@ -541,6 +616,13 @@ public sealed partial class YamlDocument
                         }
 
                         breakPosition += nextBreak;
+
+                        if (betweenLines[breakPosition] == YamlSyntax.CommentIndicator)
+                        {
+                            hasComment = true;
+
+                            break;
+                        }
 
                         if (
                             betweenLines[breakPosition] == YamlSyntax.CarriageReturn
@@ -553,6 +635,14 @@ public sealed partial class YamlDocument
 
                         breaks++;
                         breakPosition++;
+                    }
+
+                    // A line that starts with ",", "}" or ": " belongs to the collection, not to the scalar.
+                    if (hasComment || flow && document.IsFlowScalarTerminatorAt(Position))
+                    {
+                        _position = lineEnd;
+
+                        break;
                     }
 
                     if (breaks == 1)
@@ -648,7 +738,7 @@ public sealed partial class YamlDocument
     }
 
     // TODO: 200+ LoC
-    private ParsedScalar ParseLiteralOrFoldedBlockScalarText(int parentIndent)
+    private ParsedScalarIntermediate ReadLiteralOrFoldedBlockScalarText(int parentIndent)
     {
         // A block scalar scans every physical line, so reuse the source span throughout the scan.
         var source = Source;
@@ -687,7 +777,7 @@ public sealed partial class YamlDocument
                 }
 
                 // The scalar token does not exist yet,
-                // so retain its header comment until CreateTokenForParsedScalar can attach it.
+                // so retain its header comment until CreateTokenFromParsedScalar can attach it.
                 _position--;
 
                 var commentStart = _position;
@@ -700,7 +790,7 @@ public sealed partial class YamlDocument
                         source[..commentStart]
                             .LastIndexOfAnyExcept(YamlSyntax.Space, YamlSyntax.Tab) + 1;
 
-                    trailingComment = StoreTrailingComment(source[whitespaceStart.._position]);
+                    trailingComment = CreateTrailingComment(source[whitespaceStart.._position]);
                 }
 
                 break;
@@ -736,7 +826,10 @@ public sealed partial class YamlDocument
         while (_position < source.Length)
         {
             var lineStart = _position;
-            var indent = CountIndent(lineStart);
+
+            // The source stays fixed across block lines, so scan this span without reacquiring it per line.
+            var firstNonSpace = source[lineStart..].IndexOfAnyExcept(YamlSyntax.Space);
+            var indent = firstNonSpace < 0 ? source.Length - lineStart : firstNonSpace;
             var contentStart = lineStart + indent;
             var empty = contentStart >= source.Length || YamlSyntax.IsLineEnd(source[contentStart]);
             if (!empty && contentIndent < 0)
@@ -777,11 +870,11 @@ public sealed partial class YamlDocument
                 }
             }
 
-            _position = contentStart;
+            var lineEndOffset = source[contentStart..].IndexOfAny(YamlSyntax.LineEndBytes);
 
-            SkipToLineEnd();
+            var lineEnd = lineEndOffset < 0 ? source.Length : contentStart + lineEndOffset;
+            _position = lineEnd;
 
-            var lineEnd = _position;
             var cut = contentIndent < 0 ? indent : Math.Min(indent, contentIndent);
             var valueStart = lineStart + cut;
 
@@ -921,6 +1014,21 @@ public sealed partial class YamlDocument
             return;
         }
 
+        // QuoteEncoder only escapes printable ASCII for quotes and backslashes. Long text without
+        // either can be copied directly instead of reserving up to six bytes for every input byte.
+        if (
+            value.Length >= StackLimit
+            && value.IndexOfAnyExceptInRange(YamlSyntax.Space, (byte)(YamlSyntax.Delete - 1)) < 0
+            && value.IndexOfAny(YamlSyntax.DoubleQuote, YamlSyntax.Backslash) < 0
+        )
+        {
+            writer.WriteUtf8Byte(YamlSyntax.DoubleQuote);
+            writer.WriteString(value);
+            writer.WriteUtf8Byte(YamlSyntax.DoubleQuote);
+
+            return;
+        }
+
         var encoder = YamlSyntax.QuoteEncoder;
         var output = writer.BeginWriteUtf8Bytes(checked(value.Length * 6 + 2));
 
@@ -961,7 +1069,7 @@ public sealed partial class YamlDocument
             firstContentLine is { Length: > 0 }
             && YamlSyntax.IsWhiteSpaceOrLineEnd(firstContentLine[0]);
 
-        if (requiresExplicitIndent && options.IndentSize > 9)
+        if (requiresExplicitIndent && options.IndentSize > YamlSyntax.MaxBlockScalarIndentIndicator)
         {
             ThrowGenericError(
                 ParseException.ErrorCode.UnsupportedFeature,
@@ -980,11 +1088,12 @@ public sealed partial class YamlDocument
             writer.WriteUtf8Byte(YamlSyntax.Plus);
         }
 
-        var lines = value.Split(YamlSyntax.LineFeed);
+        // Chomping already accounts for a terminal LF; including it in the split adds a false content line.
+        var lineText = trailingNewlines > 0 ? value[..^1] : value;
         if (requiresExplicitIndent)
         {
             // An explicit indent keeps leading spaces in the value instead of treating them as indentation.
-            writer.WriteUtf8Byte((byte)('0' + options.IndentSize));
+            writer.WriteUtf8Byte((byte)(YamlSyntax.DigitZero + options.IndentSize));
         }
 
         // Write trailing comments before the first content line.
@@ -996,16 +1105,18 @@ public sealed partial class YamlDocument
             writer.PushIndent();
         }
 
-        foreach (var lineRange in lines)
+        if (trailingNewlines > 0 && lineText.IsEmpty)
         {
-            // A terminal LF creates an empty split range but not another content line.
-            if (trailingNewlines > 0 && lineRange.Start.GetOffset(value.Length) == value.Length)
-            {
-                break;
-            }
-
+            // A value containing only one LF still has one empty content line.
             writer.WriteIndentNewLine();
-            writer.WriteString(value[lineRange]);
+        }
+        else
+        {
+            foreach (var lineRange in lineText.Split(YamlSyntax.LineFeed))
+            {
+                writer.WriteIndentNewLine();
+                writer.WriteString(lineText[lineRange]);
+            }
         }
 
         if (depth == 0)

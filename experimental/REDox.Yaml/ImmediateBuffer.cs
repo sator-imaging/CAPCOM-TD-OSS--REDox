@@ -11,12 +11,12 @@ namespace REDox.Yaml;
 /// // use stack only for small array
 /// var buffer = size &lt;= 128 ? stackalloc byte[size] : default;
 ///
-/// // ImmediateBuffer replaces empty span with an ArrayPool buffer and
-/// // returns it to pool on dispose. non-empty buffer remains unchanged
+/// // ImmediateBuffer replaces an empty span with an ArrayPool buffer for a positive size
+/// // and returns it to the pool on dispose. A non-empty span remains unchanged.
 /// using var _ = ImmediateBuffer&lt;byte&gt;.Using(size, ref buffer);
 /// </code>
 /// </summary>
-// NOTE: 'ref' is not required but added to limit use case
+// perf: IDisposable of ref struct produces smaller IL code
 internal readonly ref struct ImmediateBuffer<T> : IDisposable
 {
     private readonly T[] buffer;
@@ -41,7 +41,7 @@ internal readonly ref struct ImmediateBuffer<T> : IDisposable
         ref Span<T> pass_default_to_rent_array_pool_buffer
     )
     {
-        if (!pass_default_to_rent_array_pool_buffer.IsEmpty)
+        if (size == 0 || !pass_default_to_rent_array_pool_buffer.IsEmpty)
         {
             Debug.Assert(default(ImmediateBuffer<T>).buffer is null); // ensure default ctor leaves buffer null
 

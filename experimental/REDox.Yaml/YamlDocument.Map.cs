@@ -8,15 +8,38 @@ public sealed partial class YamlDocument
 {
     private bool IsBlockMapStart()
     {
-        // Quoted keys need byte-wise escape handling; plain keys can jump to their syntax bytes.
+        // Ordinary bytes cannot change key detection, so only syntax bytes need individual checks.
         var source = Source;
-        var position = _position;
+
+        // Lookahead does not move the parser cursor, so retain its initial position for every check.
+        var keyStartPosition = _position;
+        var position = keyStartPosition;
         byte quote = YamlSyntax.NoCharacter;
         while (position < source.Length && !YamlSyntax.IsLineEnd(source[position]))
         {
-            if (quote == YamlSyntax.NoCharacter && position > _position)
+            if (quote == YamlSyntax.NoCharacter && position > keyStartPosition)
             {
                 var next = source[position..].IndexOfAny(YamlSyntax.BlockMapKeyStops);
+                if (next < 0)
+                {
+                    return false;
+                }
+
+                position += next;
+
+                if (YamlSyntax.IsLineEnd(source[position]))
+                {
+                    break;
+                }
+            }
+            else if (quote != YamlSyntax.NoCharacter)
+            {
+                ReadOnlySpan<byte> quoteStops =
+                    quote == YamlSyntax.DoubleQuote
+                        ? YamlSyntax.DoubleQuotedKeyStops
+                        : YamlSyntax.SingleQuotedKeyStops;
+
+                var next = source[position..].IndexOfAny(quoteStops);
                 if (next < 0)
                 {
                     return false;
@@ -52,7 +75,7 @@ public sealed partial class YamlDocument
                 // same goes for "#", which starts a comment only after white space.
                 if (
                     current is YamlSyntax.DoubleQuote or YamlSyntax.SingleQuote
-                    && position == _position
+                    && position == keyStartPosition
                 )
                 {
                     quote = current;
@@ -70,7 +93,7 @@ public sealed partial class YamlDocument
                 else if (
                     current == YamlSyntax.CommentIndicator
                     && (
-                        position == _position
+                        position == keyStartPosition
                         || YamlSyntax.IsWhiteSpaceOrLineEnd(source[position - 1])
                     )
                 )
@@ -89,7 +112,7 @@ public sealed partial class YamlDocument
         return false;
     }
 
-    private uint ParseFlowMap(int depth, int parentIndent)
+    private uint ReadFlowMap(int depth, int parentIndent)
     {
         // Child parsing advances the cursor without replacing the input buffer.
         var source = Source;
@@ -107,7 +130,7 @@ public sealed partial class YamlDocument
 
         while (_position < source.Length && source[_position] != YamlSyntax.FlowMappingEnd)
         {
-            ParseFlowPair(mapId, depth, parentIndent, keys);
+            ReadFlowPair(mapId, depth, parentIndent, keys);
             SkipTrivia(leaveSameLineCommentForNextNode: false);
             ValidateFlowContinuationIndent(parentIndent);
 
@@ -147,16 +170,19 @@ public sealed partial class YamlDocument
 
     // One "key: value" entry of a flow mapping, also used for the single pair in a flow sequence.
     // The colon may be on a later line than its key, and a key without a colon has a null value ("{ a, b: c }").
-    private void ParseFlowPair(uint mapId, int depth, int parentIndent, HashSet<DElement>? keys)
+    private void ReadFlowPair(uint mapId, int depth, int parentIndent, HashSet<DElement>? keys)
     {
+        // Nested reads move the cursor but retain the input span for this entry.
+        var source = Source;
+
         RequireAllowedDepth(depth + 1);
 
         uint keyId;
         if (IsExplicitKeyStart(flow: true))
         {
-            keyId = ParseExplicitFlowKey(this, parentIndent);
+            keyId = ReadExplicitFlowKey(this, parentIndent);
 
-            static uint ParseExplicitFlowKey(YamlDocument document, int parentIndent)
+            static uint ReadExplicitFlowKey(YamlDocument document, int parentIndent)
             {
                 // "? key": the key may span lines, and nothing after the "?" is a null key. A collection is not supported.
                 document._position++;
@@ -164,12 +190,13 @@ public sealed partial class YamlDocument
                 document.SkipTrivia(leaveSameLineCommentForNextNode: true);
                 document.ValidateFlowContinuationIndent(parentIndent);
 
-                if (document._position >= document.Source.Length)
+                var source = document.Source;
+                if (document._position >= source.Length)
                 {
                     document.ThrowParseError(ParseException.ErrorCode.InvalidFormat);
                 }
 
-                var keyStart = document.Source[document._position];
+                var keyStart = source[document._position];
 
                 return keyStart
                     is YamlSyntax.FlowSeparator
@@ -178,8 +205,10 @@ public sealed partial class YamlDocument
                     or YamlSyntax.MappingValueIndicator
                     ? document.CreateNullToken()
                     : keyStart is YamlSyntax.FlowSequenceStart or YamlSyntax.FlowMappingStart
-                        ? throw document.ParseError(ParseException.ErrorCode.UnsupportedFeature)
-                        : document.ParseScalarNode(
+                        ? throw document.CreateParseError(
+                            ParseException.ErrorCode.UnsupportedFeature
+                        )
+                        : document.ReadScalarNode(
                             ScalarKeyContext.ExplicitMapKey,
                             parentIndent,
                             flow: true
@@ -188,7 +217,7 @@ public sealed partial class YamlDocument
         }
         else
         {
-            keyId = ParseScalarNode(ScalarKeyContext.ImplicitMapKey, parentIndent, flow: true);
+            keyId = ReadScalarNode(ScalarKeyContext.ImplicitMapKey, parentIndent, flow: true);
         }
 
         ValidateMissingStringOrDuplicateMapKey(keys, keyId);
@@ -198,12 +227,12 @@ public sealed partial class YamlDocument
         SkipTrivia(leaveSameLineCommentForNextNode: false);
         ValidateFlowContinuationIndent(parentIndent);
 
-        if (_position >= Source.Length)
+        if (_position >= source.Length)
         {
             ThrowParseError(ParseException.ErrorCode.InvalidFormat);
         }
 
-        var separator = Source[_position];
+        var separator = source[_position];
         if (separator == YamlSyntax.MappingValueIndicator)
         {
             _position++;
@@ -212,8 +241,8 @@ public sealed partial class YamlDocument
             ValidateFlowContinuationIndent(parentIndent);
 
             if (
-                _position < Source.Length
-                && Source[_position]
+                _position < source.Length
+                && source[_position]
                     is YamlSyntax.FlowSeparator
                     or YamlSyntax.FlowMappingEnd
                     or YamlSyntax.FlowSequenceEnd
@@ -223,7 +252,7 @@ public sealed partial class YamlDocument
             }
             else
             {
-                ParseNode(depth + 1, flow: true, parentIndent);
+                ReadNode(depth + 1, flow: true, parentIndent);
             }
         }
         else if (
@@ -244,14 +273,14 @@ public sealed partial class YamlDocument
     }
 
     // A single "key: value" pair directly inside a flow sequence is a one-entry mapping ("[ foo: bar ]").
-    private uint ParseFlowSinglePair(int depth, int parentIndent)
+    private uint ReadFlowSinglePair(int depth, int parentIndent)
     {
         RequireAllowedDepth(depth);
 
         var mapId = AllocToken(DToken.MakeMap(count: 0));
         _lastParsedNodeId = mapId;
 
-        ParseFlowPair(mapId, depth, parentIndent, keys: null);
+        ReadFlowPair(mapId, depth, parentIndent, keys: null);
         CompleteContainer(mapId);
 
         return mapId;
@@ -267,8 +296,27 @@ public sealed partial class YamlDocument
         if (source[position] is YamlSyntax.DoubleQuote or YamlSyntax.SingleQuote)
         {
             var quote = source[position++];
-            while (position < source.Length && !YamlSyntax.IsLineEnd(source[position]))
+            ReadOnlySpan<byte> quoteStops =
+                quote == YamlSyntax.DoubleQuote
+                    ? YamlSyntax.DoubleQuotedKeyStops
+                    : YamlSyntax.SingleQuotedKeyStops;
+
+            while (position < source.Length)
             {
+                // Only escapes, quotes, and line breaks can change the quoted-key lookahead.
+                var nextStop = source[position..].IndexOfAny(quoteStops);
+                if (nextStop < 0)
+                {
+                    return false;
+                }
+
+                position += nextStop;
+
+                if (YamlSyntax.IsLineEnd(source[position]))
+                {
+                    return false;
+                }
+
                 var current = source[position++];
                 if (quote == YamlSyntax.DoubleQuote && current == YamlSyntax.Backslash)
                 {
@@ -307,6 +355,15 @@ public sealed partial class YamlDocument
 
         while (position < source.Length)
         {
+            // Ordinary key bytes cannot end the lookahead, so jump directly to a possible terminator.
+            var nextStop = source[position..].IndexOfAny(YamlSyntax.PlainFlowStops);
+            if (nextStop < 0)
+            {
+                return false;
+            }
+
+            position += nextStop;
+
             var current = source[position];
             if (YamlSyntax.IsLineEnd(current) || YamlSyntax.IsFlowIndicator(current))
             {
@@ -371,7 +428,7 @@ public sealed partial class YamlDocument
                    or YamlSyntax.FlowMappingEnd;
     }
 
-    private uint ParseBlockMap(int depth)
+    private uint ReadBlockMap(int depth)
     {
         // Entry parsing changes positions, not the source span shared by all entries.
         var source = Source;
@@ -384,7 +441,7 @@ public sealed partial class YamlDocument
             ? new(new MapKeyContentComparer())
             : null;
 
-        // ParseNode already confirmed the first entry starts a block map. Scanning its line again only delays parsing.
+        // ReadNode already confirmed the first entry starts a block map. Scanning its line again only delays parsing.
         var firstEntry = true;
         while (_position < source.Length)
         {
@@ -399,11 +456,11 @@ public sealed partial class YamlDocument
 
             if (isExplicitKey)
             {
-                ParseExplicitMapEntry(depth, baseIndent, keys);
+                ReadExplicitMapEntry(depth, baseIndent, keys);
             }
             else
             {
-                ParseImplicitMapEntry(depth, baseIndent, keys);
+                ReadImplicitMapEntry(depth, baseIndent, keys);
             }
 
             IncToken(mapId);
@@ -434,18 +491,20 @@ public sealed partial class YamlDocument
         return mapId;
     }
 
-    private void ParseImplicitMapEntry(int depth, int baseIndent, HashSet<DElement>? keys)
+    private void ReadImplicitMapEntry(int depth, int baseIndent, HashSet<DElement>? keys)
     {
+        var source = Source;
+
         RequireAllowedDepth(depth + 1);
 
-        var keyId = ParseScalarNode(ScalarKeyContext.ImplicitMapKey);
+        var keyId = ReadScalarNode(ScalarKeyContext.ImplicitMapKey);
         _lastParsedNodeId = keyId;
 
         ValidateMissingStringOrDuplicateMapKey(keys, keyId);
         SkipInlineSpaces();
 
         // Leave the cursor on an unexpected separator so the parse error points to it.
-        if (_position >= Source.Length || Source[_position] != YamlSyntax.MappingValueIndicator)
+        if (_position >= source.Length || source[_position] != YamlSyntax.MappingValueIndicator)
         {
             ThrowParseError(ParseException.ErrorCode.InvalidFormat);
         }
@@ -455,18 +514,18 @@ public sealed partial class YamlDocument
         SkipInlineSpaces();
 
         if (
-            _position >= Source.Length
-            || YamlSyntax.IsLineEnd(Source[_position])
-            || Source[_position] == YamlSyntax.CommentIndicator
+            _position >= source.Length
+            || YamlSyntax.IsLineEnd(source[_position])
+            || source[_position] == YamlSyntax.CommentIndicator
         )
         {
-            ParseMapValueAfterEmptyIndicatorLine(depth, baseIndent, keyId);
+            ReadMapValueAfterEmptyIndicatorLine(depth, baseIndent, keyId);
         }
         else
         {
             var lineStart = FindCurrentLineStart(_position);
 
-            ParseNode(depth + 1, parentIndent: baseIndent, mapValueOnKeyLine: true);
+            ReadNode(depth + 1, parentIndent: baseIndent, mapValueOnKeyLine: true);
 
             if (FindCurrentLineStart(_position) == lineStart)
             {
@@ -476,7 +535,7 @@ public sealed partial class YamlDocument
     }
 
     // The value of an entry that has nothing after its ":" on the line: the following lines, or null.
-    private void ParseMapValueAfterEmptyIndicatorLine(int depth, int baseIndent, uint keyId)
+    private void ReadMapValueAfterEmptyIndicatorLine(int depth, int baseIndent, uint keyId)
     {
         SkipRestOfLineAndLineBreak(commentOwnerId: keyId);
 
@@ -486,7 +545,7 @@ public sealed partial class YamlDocument
         if (Indent > baseIndent || Indent == baseIndent && IsBlockSequenceIndicator(Position))
         {
             AdvanceToPeekedContent(Position);
-            ParseNode(depth + 1, parentIndent: baseIndent);
+            ReadNode(depth + 1, parentIndent: baseIndent);
         }
         else
         {
@@ -498,25 +557,27 @@ public sealed partial class YamlDocument
     // Only a scalar can be the key; a collection as a key is not supported.
     // The value may start on the line of the ":" even when it is a block collection ("? a" and ": - b"),
     // and an entry without ": value" has a null value.
-    private void ParseExplicitMapEntry(int depth, int baseIndent, HashSet<DElement>? keys)
+    private void ReadExplicitMapEntry(int depth, int baseIndent, HashSet<DElement>? keys)
     {
+        var source = Source;
+
         RequireAllowedDepth(depth + 1);
 
         _position++;
 
-        var keyId = ParseExplicitKey(depth, baseIndent);
+        var keyId = ReadExplicitKey(depth, baseIndent);
         _lastParsedNodeId = keyId;
 
         ValidateMissingStringOrDuplicateMapKey(keys, keyId);
         SkipTrivia(leaveSameLineCommentForNextNode: false);
 
         if (
-            _position < Source.Length
-            && Source[_position] == YamlSyntax.MappingValueIndicator
+            _position < source.Length
+            && source[_position] == YamlSyntax.MappingValueIndicator
             && _position - FindCurrentLineStart(_position) == baseIndent
             && (
-                _position + 1 == Source.Length
-                || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[_position + 1])
+                _position + 1 == source.Length
+                || YamlSyntax.IsWhiteSpaceOrLineEnd(source[_position + 1])
             )
         )
         {
@@ -525,18 +586,18 @@ public sealed partial class YamlDocument
             SkipInlineSpaces();
 
             if (
-                _position >= Source.Length
-                || YamlSyntax.IsLineEnd(Source[_position])
-                || Source[_position] == YamlSyntax.CommentIndicator
+                _position >= source.Length
+                || YamlSyntax.IsLineEnd(source[_position])
+                || source[_position] == YamlSyntax.CommentIndicator
             )
             {
-                ParseMapValueAfterEmptyIndicatorLine(depth, baseIndent, keyId);
+                ReadMapValueAfterEmptyIndicatorLine(depth, baseIndent, keyId);
             }
             else
             {
                 var lineStart = FindCurrentLineStart(_position);
 
-                ParseNode(depth + 1, parentIndent: baseIndent);
+                ReadNode(depth + 1, parentIndent: baseIndent);
 
                 if (FindCurrentLineStart(_position) == lineStart)
                 {
@@ -551,7 +612,7 @@ public sealed partial class YamlDocument
     }
 
     // The key after "?": a scalar on the same line, or on the following lines, or nothing (a null key).
-    private uint ParseExplicitKey(int depth, int baseIndent)
+    private uint ReadExplicitKey(int depth, int baseIndent)
     {
         SkipInlineSpaces();
 
@@ -569,7 +630,7 @@ public sealed partial class YamlDocument
             {
                 AdvanceToPeekedContent(Position);
 
-                return ParseExplicitKeyScalar(depth, baseIndent);
+                return ReadExplicitKeyScalar(depth, baseIndent);
             }
 
             // A sequence at the indentation of the "?" is the key (a collection).
@@ -581,10 +642,10 @@ public sealed partial class YamlDocument
             return CreateNullToken();
         }
 
-        return ParseExplicitKeyScalar(depth, baseIndent);
+        return ReadExplicitKeyScalar(depth, baseIndent);
     }
 
-    private uint ParseExplicitKeyScalar(int depth, int baseIndent)
+    private uint ReadExplicitKeyScalar(int depth, int baseIndent)
     {
         if (
             Source[_position] is YamlSyntax.FlowSequenceStart or YamlSyntax.FlowMappingStart
@@ -596,7 +657,7 @@ public sealed partial class YamlDocument
             ThrowParseError(ParseException.ErrorCode.UnsupportedFeature);
         }
 
-        return ParseNode(
+        return ReadNode(
             depth + 1,
             parentIndent: baseIndent,
             mapValueOnKeyLine: true,
@@ -675,7 +736,11 @@ public sealed partial class YamlDocument
                 ? GetTrailingComment(reader, pair.Key, options)
                 : default;
 
-            writer.WriteString(keyTrailingComment);
+            // Most map keys have no comment, so skip the writer call for an empty span.
+            if (!keyTrailingComment.IsEmpty)
+            {
+                writer.WriteString(keyTrailingComment);
+            }
 
             var value = reader.GetToken(pair.Value);
 

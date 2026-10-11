@@ -24,24 +24,36 @@ internal readonly struct MapKeyContentComparer : IEqualityComparer<DElement>
                {
                    DTokenKind.Null => true,
                    DTokenKind.Boolean => left.GetBoolean() == right.GetBoolean(),
-                   DTokenKind.Integer => ReadIntegerValue(left) == ReadIntegerValue(right),
+                   DTokenKind.Integer => GetComparableIntegerValue(left)
+                                         == GetComparableIntegerValue(right),
                    DTokenKind.Float => left.GetDouble().Equals(right.GetDouble()),
                    DTokenKind.Timestamp => left.GetDateTimeOffset().Equals(right.GetDateTimeOffset()),
                    DTokenKind.String => new DataReader(left)
                        .ReadUtf8String(left.Id)
                        .SequenceEqual(new DataReader(right).ReadUtf8String(right.Id)),
-                   _ => throw YamlDocument.GenericError(
+                   _ => throw YamlDocument.CreateGenericError(
                        YamlDocument.ParseException.ErrorCode.UnsupportedFeature,
                        "YAML key comparison requires a supported scalar value."
                    ),
                };
 
-        static BigInteger ReadIntegerValue(DElement element)
+        static BigInteger GetComparableIntegerValue(DElement element)
         {
             if (element.Token.Kind == DTokenKind.BigNumber)
             {
+                var utf8 = element.GetBigNumber();
+
+                // UTF-8 decoding produces no more UTF-16 code units than input bytes, even with replacements,
+                // so the temporary span avoids both a count pass and a string allocation.
+                var characters =
+                    utf8.Length <= YamlDocument.StackLimit ? stackalloc char[utf8.Length] : default;
+
+                using var _ = ImmediateBuffer<char>.Using(utf8.Length, ref characters);
+
+                var written = Encoding.UTF8.GetChars(utf8, characters);
+
                 return BigInteger.Parse(
-                    Encoding.UTF8.GetString(element.GetBigNumber()),
+                    characters[..written],
                     NumberStyles.Integer,
                     CultureInfo.InvariantCulture
                 );

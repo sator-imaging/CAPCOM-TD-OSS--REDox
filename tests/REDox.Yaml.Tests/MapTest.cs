@@ -56,6 +56,8 @@ public sealed class MapTest
     [InlineData("{\n  a: 1,\n  b: [2,\n    3],\n}\n", "{\"a\":1,\"b\":[2,3]}")]
     [InlineData("a: {\n  b: 1,\n  c: 2\n }\n", "{\"a\":{\"b\":1,\"c\":2}}")]
     [InlineData("a:\n  - b: 1\n    c: 2\n  - d: 3\n", "{\"a\":[{\"b\":1,\"c\":2},{\"d\":3}]}")]
+    [InlineData("some : value", "{\"some\":\"value\"}")]
+    [InlineData("{some : value}", "{\"some\":\"value\"}")]
     public void BlockAndFlowMapShapes_ParseExpectedValuesAndRoundTrip(
         string yaml,
         string expectedJson
