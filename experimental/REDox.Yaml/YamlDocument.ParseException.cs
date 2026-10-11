@@ -44,12 +44,12 @@ public sealed partial class YamlDocument
     internal static void ThrowGenericError(ParseException.ErrorCode code, string? message = null) =>
         throw new ParseException(-1, code, message);
 
-    internal DocumentParseException ParseError(
+    internal DocumentParseException CreateParseError(
         ParseException.ErrorCode code,
         string? message = null
     ) => new ParseException(_position, code, message);
 
-    internal static DocumentParseException GenericError(
+    internal static DocumentParseException CreateGenericError(
         ParseException.ErrorCode code,
         string? message = null
     ) => new ParseException(-1, code, message);

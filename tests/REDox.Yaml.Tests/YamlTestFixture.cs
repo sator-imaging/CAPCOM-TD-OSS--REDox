@@ -35,41 +35,61 @@ internal static class YamlTestFixture
     public static void RandomizeArrayPoolBuffers(string parsedYamlSource)
     {
         var sourceByteLength = Encoding.UTF8.GetByteCount(parsedYamlSource);
+        var rentedBuffers = new List<byte[]>();
 
-        // PooledBufferWriter uses the shared array pool.
-        // Randomizing buffer guarantees that YamlDocument doesn't refer it.
-        for (int reuseAttemp = 0; reuseAttemp < 3; reuseAttemp++)
+        // Keeping rentals alive makes repeated requests take distinct arrays from the shared pool.
+        try
         {
-            foreach (
-                var requestedSize in new[]
-                {
-                    Math.Max(1, sourceByteLength),
-                    Math.Max(1, sourceByteLength >> 1),
-                    Math.Max(1, sourceByteLength >> 2),
-                    Math.Max(1, sourceByteLength >> 3),
-                    Math.Max(1, sourceByteLength >> 4),
-                    Math.Max(1, sourceByteLength >> 5),
-                    Math.Max(1, sourceByteLength >> 6),
-                    Math.Max(1, sourceByteLength >> 7),
-                    SerializerSettings.Default.DefaultBufferSize,
-                }
-            )
+            for (int reuseAttemp = 0; reuseAttemp < 8; reuseAttemp++)
             {
-                if (requestedSize == 0)
+                foreach (
+                    var requestedSize in new[]
+                    {
+                        sourceByteLength,
+                        sourceByteLength >> 1,
+                        sourceByteLength >> 2,
+                        sourceByteLength >> 3,
+                        sourceByteLength >> 4,
+                        sourceByteLength >> 5,
+                        sourceByteLength >> 6,
+                        sourceByteLength >> 7,
+                        sourceByteLength >> 8,
+                        sourceByteLength >> 9,
+                        sourceByteLength >> 10,
+                        sourceByteLength >> 11,
+                        sourceByteLength >> 12,
+                        sourceByteLength >> 13,
+                        sourceByteLength >> 14,
+                        sourceByteLength >> 15,
+                        sourceByteLength >> 16,
+                        sourceByteLength >> 17,
+                        sourceByteLength >> 18,
+                        sourceByteLength >> 19,
+                        sourceByteLength >> 20,
+                        sourceByteLength >> 21,
+                        sourceByteLength >> 22,
+                        sourceByteLength >> 23,
+                        SerializerSettings.Default.DefaultBufferSize,
+                    }
+                )
                 {
-                    continue;
-                }
+                    if (requestedSize == 0)
+                    {
+                        continue;
+                    }
 
-                var rentedBuffer = ArrayPool<byte>.Shared.Rent(requestedSize);
+                    var rentedBuffer = ArrayPool<byte>.Shared.Rent(requestedSize);
 
-                try
-                {
+                    rentedBuffers.Add(rentedBuffer);
                     Random.Shared.NextBytes(rentedBuffer);
                 }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(rentedBuffer);
-                }
+            }
+        }
+        finally
+        {
+            foreach (var rentedBuffer in rentedBuffers)
+            {
+                ArrayPool<byte>.Shared.Return(rentedBuffer);
             }
         }
     }
@@ -82,6 +102,69 @@ internal static class YamlTestFixture
         Debug.Assert(value is T);
 
         return (T)value;
+    }
+
+    public static void DebugDeepEquals(DValue expected, DValue actual)
+    {
+        // Keep the path on the stack so a failed assertion identifies the nested value without recursive calls.
+        var pending = new Stack<(DValue Expected, DValue Actual, string Path)>();
+
+        pending.Push((expected, actual, "$"));
+
+        while (pending.Count > 0)
+        {
+            var (expectedValue, actualValue, path) = pending.Pop();
+            var expectedToken = expectedValue.GetToken();
+            var actualToken = actualValue.GetToken();
+
+            if (expectedToken.Type == DTokenType.Array && actualToken.Type == DTokenType.Array)
+            {
+                var expectedArray = expectedValue.AsArray();
+                var actualArray = actualValue.AsArray();
+
+                Assert.True(
+                    expectedArray.Count == actualArray.Count,
+                    $"Array length differs at {path}: expected {expectedArray.Count}, actual {actualArray.Count}."
+                );
+
+                for (var index = expectedArray.Count - 1; index >= 0; index--)
+                {
+                    pending.Push((expectedArray[index], actualArray[index], $"{path}[{index}]"));
+                }
+
+                continue;
+            }
+
+            if (expectedToken.Type == DTokenType.Map && actualToken.Type == DTokenType.Map)
+            {
+                var expectedObject = expectedValue.AsObject();
+                var actualObject = actualValue.AsObject();
+
+                Assert.True(
+                    expectedObject.Count == actualObject.Count,
+                    $"Property count differs at {path}: expected {expectedObject.Count}, actual {actualObject.Count}."
+                );
+
+                foreach (var property in expectedObject)
+                {
+                    var propertyPath = $"{path}.{property.Key}";
+
+                    Assert.True(
+                        actualObject.TryGetPropertyValue(property.Key, out var actualPropertyValue),
+                        $"Property is missing at {propertyPath}."
+                    );
+
+                    pending.Push((property.Value, actualPropertyValue, propertyPath));
+                }
+
+                continue;
+            }
+
+            Assert.True(
+                DValue.DeepEquals(expectedValue, actualValue),
+                $"Values differ at {path}: expected {expectedToken}, actual {actualToken}."
+            );
+        }
     }
 
     // NOTE: DocumentParseException has no ErrorCode property.

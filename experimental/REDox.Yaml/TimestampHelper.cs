@@ -16,7 +16,7 @@ internal static class TimestampHelper
     /// Decides whether a text is a timestamp.
     /// A text that looks like a timestamp but is not a real date or time is ignored (e.g., "2001-13-45").
     /// </summary>
-    public static bool TryGetKind(string text, out TimestampKind kind)
+    public static bool TryParseTimestampKind(string text, out TimestampKind kind)
     {
         if (TryParse(text, out var parts))
         {
@@ -59,7 +59,7 @@ internal static class TimestampHelper
     {
         return TryParse(text, out var parts)
             ? parts
-            : throw YamlDocument.GenericError(
+            : throw YamlDocument.CreateGenericError(
                 YamlDocument.ParseException.ErrorCode.InvalidValue,
                 $"'{text}' is not a YAML timestamp."
             );
@@ -67,10 +67,8 @@ internal static class TimestampHelper
 
     public static bool StartsLikeTimestamp(ReadOnlySpan<byte> text)
     {
-        // TODO: i18n support. 4 digits followed by '-' is very limited.
-        //       Add option something like RecognizeExtendedDateTimeFormat.
-        return text.Length >= 8
-               && text[4] == YamlSyntax.Dash
+        return text.Length >= YamlSyntax.MinimumTimestampLength
+               && text[YamlSyntax.TimestampYearDigits] == YamlSyntax.Dash
                && YamlSyntax.IsAsciiDigit(text[0])
                && YamlSyntax.IsAsciiDigit(text[1])
                && YamlSyntax.IsAsciiDigit(text[2])
@@ -81,9 +79,10 @@ internal static class TimestampHelper
     {
         parts = default;
 
-        // TODO: i18n support. 4 digits followed by '-' is very limited.
-        //       Add option something like RecognizeExtendedDateTimeFormat.
-        if (text.Length < 8 || text[4] != YamlSyntax.Dash)
+        if (
+            text.Length < YamlSyntax.MinimumTimestampLength
+            || text[YamlSyntax.TimestampYearDigits] != YamlSyntax.Dash
+        )
         {
             return false;
         }
@@ -94,9 +93,11 @@ internal static class TimestampHelper
             return false;
         }
 
-        var year = int.Parse(match.Groups[1].ValueSpan, CultureInfo.InvariantCulture);
-        var month = int.Parse(match.Groups[2].ValueSpan, CultureInfo.InvariantCulture);
-        var day = int.Parse(match.Groups[3].ValueSpan, CultureInfo.InvariantCulture);
+        // Every field comes from the same match, so avoid fetching its group collection repeatedly.
+        var groups = match.Groups;
+        var year = int.Parse(groups[1].ValueSpan, CultureInfo.InvariantCulture);
+        var month = int.Parse(groups[2].ValueSpan, CultureInfo.InvariantCulture);
+        var day = int.Parse(groups[3].ValueSpan, CultureInfo.InvariantCulture);
 
         // The year 0000 does not exist in DateTime.
         if (year < 1 || month is < 1 or > 12 || day < 1 || day > DateTime.DaysInMonth(year, month))
@@ -105,16 +106,16 @@ internal static class TimestampHelper
         }
 
         var wallClock = new DateTime(year, month, day);
-        if (!match.Groups[4].Success)
+        if (!groups[4].Success)
         {
             parts = new ParsedTimestampParts(wallClock, Offset: null, TimestampKind.LocalDate);
 
             return true;
         }
 
-        var hour = int.Parse(match.Groups[4].ValueSpan, CultureInfo.InvariantCulture);
-        var minute = int.Parse(match.Groups[5].ValueSpan, CultureInfo.InvariantCulture);
-        var second = int.Parse(match.Groups[6].ValueSpan, CultureInfo.InvariantCulture);
+        var hour = int.Parse(groups[4].ValueSpan, CultureInfo.InvariantCulture);
+        var minute = int.Parse(groups[5].ValueSpan, CultureInfo.InvariantCulture);
+        var second = int.Parse(groups[6].ValueSpan, CultureInfo.InvariantCulture);
         if (hour > 23 || minute > 59 || second > 59)
         {
             return false;
@@ -123,9 +124,9 @@ internal static class TimestampHelper
         wallClock = new DateTime(year, month, day, hour, minute, second);
 
         // A fraction finer than 100 ns (7 digits) is cut off in the DateTime value only; the written text is kept.
-        if (match.Groups[7].Success && match.Groups[7].Length > 0)
+        if (groups[7].Success && groups[7].Length > 0)
         {
-            var digits = match.Groups[7].ValueSpan;
+            var digits = groups[7].ValueSpan;
             digits = digits.Length > 7 ? digits[..7] : digits;
 
             var ticks = long.Parse(digits, CultureInfo.InvariantCulture);
@@ -137,14 +138,14 @@ internal static class TimestampHelper
             wallClock = wallClock.AddTicks(ticks);
         }
 
-        if (!match.Groups[8].Success)
+        if (!groups[8].Success)
         {
             parts = new ParsedTimestampParts(wallClock, Offset: null, TimestampKind.LocalDateTime);
 
             return true;
         }
 
-        if (!TryParseOffset(match.Groups[8].Value, out var offset))
+        if (!TryParseOffset(groups[8].Value, out var offset))
         {
             return false;
         }

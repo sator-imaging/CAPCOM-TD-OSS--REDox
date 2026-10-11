@@ -123,8 +123,7 @@ internal sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
         _length = 0;
     }
 
-    // perf: 'internal' to allow consumer extends buffer to enough size before processing.
-    internal void EnsureCapacity(int additional)
+    private void EnsureCapacity(int additional)
     {
         Debug.Assert(additional >= 0);
 

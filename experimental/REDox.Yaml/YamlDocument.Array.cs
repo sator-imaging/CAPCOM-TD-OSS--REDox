@@ -7,14 +7,16 @@ public sealed partial class YamlDocument
 {
     private bool IsBlockSequenceIndicator(int position)
     {
-        return Source[position] == YamlSyntax.Dash
+        var source = Source;
+
+        return source[position] == YamlSyntax.Dash
                && (
-                   position + 1 == Source.Length
-                   || YamlSyntax.IsWhiteSpaceOrLineEnd(Source[position + 1])
+                   position + 1 == source.Length
+                   || YamlSyntax.IsWhiteSpaceOrLineEnd(source[position + 1])
                );
     }
 
-    private uint ParseFlowArray(int depth, int parentIndent)
+    private uint ReadFlowArray(int depth, int parentIndent)
     {
         // The input buffer remains fixed throughout parsing, so reuse its span across entries.
         var source = Source;
@@ -39,11 +41,11 @@ public sealed partial class YamlDocument
                 && IsFlowSinglePairStart()
             )
             {
-                ParseFlowSinglePair(depth + 1, parentIndent);
+                ReadFlowSinglePair(depth + 1, parentIndent);
             }
             else
             {
-                ParseNode(depth + 1, flow: true, parentIndent);
+                ReadNode(depth + 1, flow: true, parentIndent);
             }
 
             IncToken(arrayId);
@@ -84,7 +86,7 @@ public sealed partial class YamlDocument
         return arrayId;
     }
 
-    private uint ParseBlockArray(int depth)
+    private uint ReadBlockArray(int depth)
     {
         // Nested node parsing moves the cursor but never replaces the input buffer.
         var source = Source;
@@ -92,7 +94,7 @@ public sealed partial class YamlDocument
         var arrayId = AllocToken(DToken.MakeArray(count: 0));
         _lastParsedNodeId = arrayId;
 
-        // ParseNode already confirmed the first dash. Only subsequent entries need this lookahead.
+        // ReadNode already confirmed the first dash. Only subsequent entries need this lookahead.
         var firstEntry = true;
         while (_position < source.Length && (firstEntry || IsBlockSequenceIndicator(_position)))
         {
@@ -119,7 +121,7 @@ public sealed partial class YamlDocument
                 if (Indent > baseIndent)
                 {
                     AdvanceToPeekedContent(Position);
-                    ParseNode(depth + 1, parentIndent: baseIndent);
+                    ReadNode(depth + 1, parentIndent: baseIndent);
                 }
                 else
                 {
@@ -139,7 +141,7 @@ public sealed partial class YamlDocument
 
                 var lineStart = FindCurrentLineStart(_position);
 
-                ParseNode(depth + 1, parentIndent: baseIndent);
+                ReadNode(depth + 1, parentIndent: baseIndent);
 
                 if (FindCurrentLineStart(_position) == lineStart)
                 {

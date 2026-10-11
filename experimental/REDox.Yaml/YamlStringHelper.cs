@@ -36,7 +36,7 @@ internal static class YamlStringHelper
             && IsDashDigitDotTextWithoutYamlIndicators(value)
         )
         {
-            return !MayResolveAsNonStringScalar(value);
+            return !MayParseAsNonStringScalar(value);
         }
 
         var first = value[0];
@@ -63,9 +63,12 @@ internal static class YamlStringHelper
         // Common keys need only this scan instead of separate printable and syntax scans.
         if (!value.ContainsAnyExcept(YamlSyntax.PlainAsciiSafeBytes))
         {
-            // The first-byte check excluded numbers and timestamps, and every implicit keyword is at most five bytes.
-            // TODO: date time i18n support.
-            return value.Length > 5 || !MayResolveAsNonStringScalar(value);
+            // Numbers and timestamps were excluded by their first byte.
+            // Short YAML keywords can only start with a boolean or null letter,
+            // so most short keys need no further type checks.
+            return value.Length > 5
+                   || !YamlSyntax.IsBooleanScalarStart(first)
+                   || !MayParseAsNonStringScalar(value);
         }
 
         return CanWritePlainAfterAsciiCheck(value, isKey);
@@ -78,7 +81,10 @@ internal static class YamlStringHelper
             }
 
             // Most bytes cannot change plain-scalar syntax, so search only for its delimiters.
-            ReadOnlySpan<byte> syntaxCharacters = isKey ? ":#'\""u8 : ":#"u8;
+            ReadOnlySpan<byte> syntaxCharacters = isKey
+                ? YamlSyntax.PlainKeySyntaxCharacters
+                : YamlSyntax.PlainValueSyntaxCharacters;
+
             var i = 0;
             while (i < value.Length)
             {
@@ -125,7 +131,7 @@ internal static class YamlStringHelper
                 i++;
             }
 
-            return !MayResolveAsNonStringScalar(value);
+            return !MayParseAsNonStringScalar(value);
         }
     }
 
@@ -138,7 +144,7 @@ internal static class YamlStringHelper
                && !value.StartsWith(YamlSyntax.DocumentEndUtf8);
     }
 
-    private static bool MayResolveAsNonStringScalar(ReadOnlySpan<byte> value)
+    private static bool MayParseAsNonStringScalar(ReadOnlySpan<byte> value)
     {
         if (YamlSyntax.IsNullScalar(value) || YamlSyntax.TryParseBooleanScalar(value, out _))
         {
@@ -152,24 +158,33 @@ internal static class YamlStringHelper
             || first is YamlSyntax.Plus or YamlSyntax.Dash or YamlSyntax.Dot
         )
         {
-            if (YamlDocument.TryGetNumberVariant(value, out _))
+            if (YamlDocument.TryParseNumberVariant(value, out _))
             {
                 return true;
             }
 
             // Neither the core number grammar nor a timestamp can match after these byte checks,
             // so avoid decoding strings such as "30s" solely to reject them again.
-            var couldBeCoreNumber = !value.ContainsAnyExcept(YamlSyntax.CoreNumberCandidateBytes);
             var couldBeTimestamp = TimestampHelper.StartsLikeTimestamp(value);
+
+            // A dash after four leading digits cannot occur in a core-schema number.
+            var couldBeCoreNumber =
+                !couldBeTimestamp && !value.ContainsAnyExcept(YamlSyntax.CoreNumberCandidateBytes);
+
             if (couldBeCoreNumber || couldBeTimestamp)
             {
-                var text = Encoding.UTF8.GetString(value);
-                if (
-                    couldBeCoreNumber && YamlSyntax.CoreNumberPattern().IsMatch(text)
-                    || couldBeTimestamp && TimestampHelper.TryGetKind(text, out _)
-                )
+                // Neither grammar permits two decimal points, so dotted versions need no UTF-16 text or regex.
+                var firstDot = value.IndexOf(YamlSyntax.Dot);
+                if (firstDot < 0 || !value[(firstDot + 1)..].Contains(YamlSyntax.Dot))
                 {
-                    return true;
+                    var text = Encoding.UTF8.GetString(value);
+                    if (
+                        couldBeCoreNumber && YamlSyntax.CoreNumberPattern().IsMatch(text)
+                        || couldBeTimestamp && TimestampHelper.TryParseTimestampKind(text, out _)
+                    )
+                    {
+                        return true;
+                    }
                 }
             }
         }

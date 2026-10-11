@@ -325,6 +325,18 @@ public sealed class AllSupportedFeaturesTest
             $"The document read back is not equal. YAML:\n{writtenYaml}"
         );
 
+        /*
+        // TODO: Values differ at $.timestamps.no_offset:
+        //         expected TimestampOffsetDateTime payload: A00000364 (length: 20 , offset: 868),
+        //           actual TimestampLocalDateTime payload: 98000034E (length: 19 , offset: 846).
+        YamlTestFixture.DebugDeepEquals(
+            CborDocument
+                .Parse(CborDocument.Encode(restored.RootElement))
+                .RootElement.AsValue(),
+            restored.RootElement.AsValue()
+        );
+        */
+
         // xUnit2000 asks for the constant as the first argument. Suppress it for readability.
 #pragma warning disable xUnit2000
         var root = restored.RootElement.AsValue();

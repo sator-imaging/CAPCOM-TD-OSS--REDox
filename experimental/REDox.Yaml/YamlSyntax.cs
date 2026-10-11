@@ -84,6 +84,66 @@ internal static partial class YamlSyntax
     public const byte DigitOne = (byte)'1';
     public const byte DigitNine = (byte)'9';
 
+    // The block scalar header has one indentation digit, from 1 through 9.
+    public const int MaxBlockScalarIndentIndicator = DigitNine - DigitZero;
+
+    // YAML 1.2 defines the !!timestamp date format as YYYY-MM-DD (acepts only year-first format).
+    public const int TimestampYearDigits = 4;
+    public const int MinimumTimestampLength = 8;
+
+    // Prefix letters are shared by integer recognition and integer decoding.
+    public const byte BinaryPrefixLetter = (byte)'b';
+    public const byte HexPrefixLetter = (byte)'x';
+    public const byte OctalPrefixLetter = (byte)'o';
+
+    // A plain null scalar can begin with the abbreviation or either permitted case of "null".
+    public const byte NullAbbreviation = (byte)'~';
+    public const byte NullLowercaseInitial = (byte)'n';
+    public const byte NullUppercaseInitial = (byte)'N';
+    public const byte NullSecondLetter = (byte)'u';
+
+    // Keep UTF-8 literals as ReadOnlySpan properties so the compiler can use static data without allocating arrays.
+    public static ReadOnlySpan<byte> NullLowercaseUtf8 => "null"u8;
+    public static ReadOnlySpan<byte> NullCapitalizedUtf8 => "Null"u8;
+    public static ReadOnlySpan<byte> NullUppercaseUtf8 => "NULL"u8;
+
+    // YAML 1.1 accepts these exact boolean spellings; mixed case remains a string.
+    public const byte YesFirstLetter = (byte)'y';
+    public const byte TrueFirstLetter = (byte)'t';
+    public const byte OnOffFirstLetter = (byte)'o';
+    public const byte FalseFirstLetter = (byte)'f';
+
+    public static ReadOnlySpan<byte> YesLowercaseUtf8 => "yes"u8;
+    public static ReadOnlySpan<byte> YesCapitalizedUtf8 => "Yes"u8;
+    public static ReadOnlySpan<byte> YesUppercaseUtf8 => "YES"u8;
+    public static ReadOnlySpan<byte> TrueLowercaseUtf8 => "true"u8;
+    public static ReadOnlySpan<byte> TrueCapitalizedUtf8 => "True"u8;
+    public static ReadOnlySpan<byte> TrueUppercaseUtf8 => "TRUE"u8;
+    public static ReadOnlySpan<byte> OnLowercaseUtf8 => "on"u8;
+    public static ReadOnlySpan<byte> OnCapitalizedUtf8 => "On"u8;
+    public static ReadOnlySpan<byte> OnUppercaseUtf8 => "ON"u8;
+    public static ReadOnlySpan<byte> OffLowercaseUtf8 => "off"u8;
+    public static ReadOnlySpan<byte> OffCapitalizedUtf8 => "Off"u8;
+    public static ReadOnlySpan<byte> OffUppercaseUtf8 => "OFF"u8;
+    public static ReadOnlySpan<byte> NoLowercaseUtf8 => "no"u8;
+    public static ReadOnlySpan<byte> NoCapitalizedUtf8 => "No"u8;
+    public static ReadOnlySpan<byte> NoUppercaseUtf8 => "NO"u8;
+    public static ReadOnlySpan<byte> FalseLowercaseUtf8 => "false"u8;
+    public static ReadOnlySpan<byte> FalseCapitalizedUtf8 => "False"u8;
+    public static ReadOnlySpan<byte> FalseUppercaseUtf8 => "FALSE"u8;
+
+    public const byte ValueKeyIndicator = (byte)'=';
+    public static ReadOnlySpan<byte> MergeKeyUtf8 => "<<"u8;
+
+    // The first and last letters reject ordinary numeric text before comparing a whole special-float spelling.
+    public const byte InfinityFirstLetter = (byte)'i';
+    public const byte NotANumberFirstLetter = (byte)'n';
+    public const byte InfinityLastLetter = (byte)'f';
+    public const byte NotANumberLastLetter = (byte)'n';
+
+    // ASCII case folding is used only after the parser has narrowed a spelling to ASCII.
+    public const byte AsciiLowercaseMask = 0x20;
+
     public const byte HexDigitUpperFirst = (byte)'A';
     public const byte HexDigitUpperLast = (byte)'F';
     public const byte HexDigitLowerFirst = (byte)'a';
@@ -111,6 +171,8 @@ internal static partial class YamlSyntax
     public const byte Delete = 0x7f;
     public const byte C1ControlLeadByte = 0xc2;
     public const byte C1ControlFirstSecondByte = 0x80;
+    public const byte C1ControlBeforeNextLineLastSecondByte = 0x84;
+    public const byte C1ControlAfterNextLineFirstSecondByte = 0x86;
     public const byte C1ControlLastSecondByte = 0x9f;
 
     // Characters that are not printable in YAML
@@ -134,7 +196,9 @@ internal static partial class YamlSyntax
     // A text that is a single dash: the sequence entry indicator, which cannot be a plain scalar
     public static ReadOnlySpan<byte> DashTextUtf8 => "-"u8;
 
-    // Document markers
+    // YAML 1.2.2 §9.1.2 treats these as markers only when followed by a line break, white space, or EOF.
+    // Keep the marker at exactly three bytes: "----" starts a plain scalar, not a document.
+    // https://yaml.org/spec/1.2.2/#912-document-markers
     public static ReadOnlySpan<byte> DocumentStartUtf8 => "---"u8;
 
     public static ReadOnlySpan<byte> DocumentEndUtf8 => "..."u8;
@@ -142,8 +206,10 @@ internal static partial class YamlSyntax
     // Used to tell the sign and the kind of a special float apart (compared ignoring case).
     public static ReadOnlySpan<byte> NegativeInfinityPrefixUtf8 => "-."u8;
     public static ReadOnlySpan<byte> InfinitySuffixUtf8 => "inf"u8;
-    public static ReadOnlySpan<byte> PositiveInfinitySuffixUtf8 => ".inf"u8;
-    public static ReadOnlySpan<byte> NotANumberSuffixUtf8 => ".nan"u8;
+    public static ReadOnlySpan<byte> CapitalizedInfinityUtf8 => ".Inf"u8;
+    public static ReadOnlySpan<byte> UppercaseInfinityUtf8 => ".INF"u8;
+    public static ReadOnlySpan<byte> CapitalizedNotANumberUtf8 => ".NaN"u8;
+    public static ReadOnlySpan<byte> UppercaseNotANumberUtf8 => ".NAN"u8;
 
     public static ReadOnlySpan<byte> EmptySequenceUtf8 => "[]"u8;
     public static ReadOnlySpan<byte> EmptyMappingUtf8 => "{}"u8;
@@ -155,6 +221,30 @@ internal static partial class YamlSyntax
     public static ReadOnlySpan<byte> NegativeZeroUtf8 => "-0.0"u8;
 
     public static ReadOnlySpan<byte> WhiteSpace => " \t"u8;
+
+    // Quoted key lookahead must stop at escapes and line breaks as well as the matching quote.
+    public static ReadOnlySpan<byte> DoubleQuotedKeyStops => "\"\\\r\n"u8;
+    public static ReadOnlySpan<byte> SingleQuotedKeyStops => "'\r\n"u8;
+
+    // Plain keys have stricter quote handling than plain values.
+    public static ReadOnlySpan<byte> PlainKeySyntaxCharacters => ":#'\""u8;
+    public static ReadOnlySpan<byte> PlainValueSyntaxCharacters => ":#"u8;
+
+    // Comments between physical lines end a plain scalar instead of joining its continuation.
+    public static readonly SearchValues<byte> PlainContinuationStops = SearchValues.Create([
+        CommentIndicator,
+        CarriageReturn,
+        LineFeed,
+    ]);
+
+    // These bounds are the printable ranges in YAML 1.2.2, section 5.1.
+    public const byte PrintableAsciiLast = (byte)'~';
+    public const int FirstNonAsciiByte = 0x80;
+    public const int PrintableBmpBeforeSurrogatesLast = 0xd7ff;
+    public const int PrintableBmpAfterSurrogatesFirst = 0xe000;
+    public const int PrintableBmpAfterSurrogatesLast = 0xfffd;
+    public const int PrintableSupplementaryFirst = 0x10000;
+    public const int PrintableSupplementaryLast = 0x10ffff;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsAsciiDigit(byte value) => value is >= DigitZero and <= DigitNine;
@@ -175,6 +265,12 @@ internal static partial class YamlSyntax
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsLineEnd(byte value) => value is CarriageReturn or LineFeed;
+
+    // Line scans must treat CR-only, LF-only, and CRLF input using the same break bytes.
+    public static readonly SearchValues<byte> LineEndBytes = SearchValues.Create([
+        CarriageReturn,
+        LineFeed,
+    ]);
 
     // Trivia scanning must use the same four bytes as IsWhiteSpaceOrLineEnd; other Unicode spaces are content.
     public static readonly SearchValues<byte> WhiteSpaceOrLineEndBytes = SearchValues.Create([
@@ -216,59 +312,106 @@ internal static partial class YamlSyntax
     // Keep its exact spellings here, shared by scalar reading and string quoting; arbitrary mixed case is a string.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsBooleanScalarStart(byte value) =>
-        (value | 0x20) is (byte)'t' or (byte)'y' or (byte)'o' or (byte)'f' or (byte)'n';
+        (value | AsciiLowercaseMask)
+        is TrueFirstLetter
+        or YesFirstLetter
+        or OnOffFirstLetter
+        or FalseFirstLetter
+        or NullLowercaseInitial;
 
     public static bool TryParseBooleanScalar(ReadOnlySpan<byte> text, out bool value)
     {
-        if (text.IsEmpty || !IsBooleanScalarStart(text[0]))
-        {
-            value = default;
+        value = false;
 
+        if (text.IsEmpty)
+        {
             return false;
         }
 
-        value = text.Length switch
-        {
-            1 => text.SequenceEqual("y"u8) || text.SequenceEqual("Y"u8),
-            2 => text.SequenceEqual("on"u8)
-                 || text.SequenceEqual("On"u8)
-                 || text.SequenceEqual("ON"u8),
-            3 => text.SequenceEqual("yes"u8)
-                 || text.SequenceEqual("Yes"u8)
-                 || text.SequenceEqual("YES"u8),
-            4 => text.SequenceEqual("true"u8)
-                 || text.SequenceEqual("True"u8)
-                 || text.SequenceEqual("TRUE"u8),
-            _ => false,
-        };
+        // TODO: This method strictly follows the YAML 1.1 spec (yES, faLSE are not boolean).
+        //       YAML 1.2 only supports 'true' and 'false' as boolean (case insensitive),
+        //       so this check can be dropped or simplified by ignoring casing.
 
-        return value
-               || (
-                   text.Length switch
-                   {
-                       1 => text.SequenceEqual("n"u8) || text.SequenceEqual("N"u8),
-                       2 => text.SequenceEqual("no"u8)
-                            || text.SequenceEqual("No"u8)
-                            || text.SequenceEqual("NO"u8),
-                       3 => text.SequenceEqual("off"u8)
-                            || text.SequenceEqual("Off"u8)
-                            || text.SequenceEqual("OFF"u8),
-                       5 => text.SequenceEqual("false"u8)
-                            || text.SequenceEqual("False"u8)
-                            || text.SequenceEqual("FALSE"u8),
-                       _ => false,
-                   }
-               );
+        // Each spelling family has its own first letter except on/off. Dispatch once so negative
+        // spellings and ordinary keys do not pass through separate true and false length tables.
+        switch ((byte)(text[0] | AsciiLowercaseMask))
+        {
+            case YesFirstLetter:
+                value =
+                    text.Length == 1
+                    || text.Length == 3
+                    && (
+                        text.SequenceEqual(YesLowercaseUtf8)
+                        || text.SequenceEqual(YesCapitalizedUtf8)
+                        || text.SequenceEqual(YesUppercaseUtf8)
+                    );
+
+                return value;
+
+            case TrueFirstLetter:
+                value =
+                    text.Length == 4
+                    && (
+                        text.SequenceEqual(TrueLowercaseUtf8)
+                        || text.SequenceEqual(TrueCapitalizedUtf8)
+                        || text.SequenceEqual(TrueUppercaseUtf8)
+                    );
+
+                return value;
+
+            case OnOffFirstLetter:
+                if (text.Length == 2)
+                {
+                    value =
+                        text.SequenceEqual(OnLowercaseUtf8)
+                        || text.SequenceEqual(OnCapitalizedUtf8)
+                        || text.SequenceEqual(OnUppercaseUtf8);
+
+                    return value;
+                }
+
+                return text.Length == 3
+                       && (
+                           text.SequenceEqual(OffLowercaseUtf8)
+                           || text.SequenceEqual(OffCapitalizedUtf8)
+                           || text.SequenceEqual(OffUppercaseUtf8)
+                       );
+
+            case NullLowercaseInitial:
+                return text.Length == 1
+                       || text.Length == 2
+                       && (
+                           text.SequenceEqual(NoLowercaseUtf8)
+                           || text.SequenceEqual(NoCapitalizedUtf8)
+                           || text.SequenceEqual(NoUppercaseUtf8)
+                       );
+
+            case FalseFirstLetter:
+                return text.Length == 5
+                       && (
+                           text.SequenceEqual(FalseLowercaseUtf8)
+                           || text.SequenceEqual(FalseCapitalizedUtf8)
+                           || text.SequenceEqual(FalseUppercaseUtf8)
+                       );
+
+            default:
+                return false;
+        }
     }
 
     public static bool IsNullScalar(ReadOnlySpan<byte> text) =>
         text.Length switch
         {
             0 => true,
-            1 => text[0] == (byte)'~',
-            4 => text.SequenceEqual("null"u8)
-                 || text.SequenceEqual("Null"u8)
-                 || text.SequenceEqual("NULL"u8),
+            1 => text[0] == NullAbbreviation,
+            // Ordinary four-byte keys can be rejected before comparing all three null spellings.
+            4 => (text[0] | AsciiLowercaseMask) == NullLowercaseInitial
+                 && (text[1] | AsciiLowercaseMask) == NullSecondLetter
+                 && (
+                     text.SequenceEqual(NullLowercaseUtf8)
+                     || text.SequenceEqual(NullCapitalizedUtf8)
+                     || text.SequenceEqual(NullUppercaseUtf8)
+                 ),
             _ => false,
         };
 
@@ -276,20 +419,24 @@ internal static partial class YamlSyntax
     {
         return text.Length switch
         {
+            // Numeric-looking text such as ".123" or "-1234" cannot spell a special float.
             4 => text[0] is Dot
+                 && (text[1] | AsciiLowercaseMask) is InfinityFirstLetter or NotANumberFirstLetter
                  && (
-                     text.SequenceEqual(".inf"u8)
-                     || text.SequenceEqual(".Inf"u8)
-                     || text.SequenceEqual(".INF"u8)
-                     || text.SequenceEqual(".nan"u8)
-                     || text.SequenceEqual(".NaN"u8)
-                     || text.SequenceEqual(".NAN"u8)
+                     text.SequenceEqual(InfinityUtf8)
+                     || text.SequenceEqual(CapitalizedInfinityUtf8)
+                     || text.SequenceEqual(UppercaseInfinityUtf8)
+                     || text.SequenceEqual(NotANumberUtf8)
+                     || text.SequenceEqual(CapitalizedNotANumberUtf8)
+                     || text.SequenceEqual(UppercaseNotANumberUtf8)
                  ),
             5 => text[0] is Plus or Dash
+                 && text[1] == Dot
+                 && (text[2] | AsciiLowercaseMask) == InfinityFirstLetter
                  && (
-                     text[1..].SequenceEqual(".inf"u8)
-                     || text[1..].SequenceEqual(".Inf"u8)
-                     || text[1..].SequenceEqual(".INF"u8)
+                     text[1..].SequenceEqual(InfinityUtf8)
+                     || text[1..].SequenceEqual(CapitalizedInfinityUtf8)
+                     || text[1..].SequenceEqual(UppercaseInfinityUtf8)
                  ),
             _ => false,
         };
@@ -302,13 +449,18 @@ internal static partial class YamlSyntax
     public static bool IsYaml11ReservedWord(ReadOnlySpan<byte> text) =>
         text.Length switch
         {
-            1 => Ascii.EqualsIgnoreCase(text, "y"u8)
-                 || Ascii.EqualsIgnoreCase(text, "n"u8)
-                 || text.SequenceEqual("="u8),
-            2 => Ascii.EqualsIgnoreCase(text, "no"u8)
-                 || Ascii.EqualsIgnoreCase(text, "on"u8)
-                 || text.SequenceEqual("<<"u8),
-            3 => Ascii.EqualsIgnoreCase(text, "yes"u8) || Ascii.EqualsIgnoreCase(text, "off"u8),
+            // Most short keys cannot match a reserved word, so reject them before comparing whole words.
+            1 => (text[0] | AsciiLowercaseMask) is YesFirstLetter or NullLowercaseInitial
+                 || text[0] == ValueKeyIndicator,
+            2 => (text[0] | AsciiLowercaseMask) == NullLowercaseInitial
+                 && Ascii.EqualsIgnoreCase(text, NoLowercaseUtf8)
+                 || (text[0] | AsciiLowercaseMask) == OnOffFirstLetter
+                 && Ascii.EqualsIgnoreCase(text, OnLowercaseUtf8)
+                 || text.SequenceEqual(MergeKeyUtf8),
+            3 => (text[0] | AsciiLowercaseMask) == YesFirstLetter
+                 && Ascii.EqualsIgnoreCase(text, YesLowercaseUtf8)
+                 || (text[0] | AsciiLowercaseMask) == OnOffFirstLetter
+                 && Ascii.EqualsIgnoreCase(text, OffLowercaseUtf8),
             _ => false,
         };
 
@@ -396,9 +548,18 @@ internal static partial class YamlSyntax
     // U+0086-U+009F) and the non-characters U+FFFE and U+FFFF are these ranges. YAML cannot hold them as they are.
     public static readonly TextEscapeRange[] QuoteEscapeRanges =
     [
-        new TextEscapeRange(firstCodePoint: 0x80, length: 5),
-        new TextEscapeRange(firstCodePoint: 0x86, length: 26),
-        new TextEscapeRange(firstCodePoint: 0xFFFE, length: 2),
+        new TextEscapeRange(
+            firstCodePoint: C1ControlFirstSecondByte,
+            length: C1ControlBeforeNextLineLastSecondByte - C1ControlFirstSecondByte + 1
+        ),
+        new TextEscapeRange(
+            firstCodePoint: C1ControlAfterNextLineFirstSecondByte,
+            length: C1ControlLastSecondByte - C1ControlAfterNextLineFirstSecondByte + 1
+        ),
+        new TextEscapeRange(
+            firstCodePoint: NonCharacterFffe,
+            length: NonCharacterFfff - NonCharacterFffe + 1
+        ),
     ];
 
     // The escapes a quoted YAML string needs independent of the serializer settings.
@@ -435,9 +596,10 @@ internal static partial class YamlSyntax
     }
 
     // UTF-8 ASCII controls can be searched as bytes; non-ASCII characters require their complete UTF-8 sequences.
-    public static readonly SearchValues<byte> NonPrintableAscii = CreateNonPrintableAscii();
+    public static readonly SearchValues<byte> NonPrintableAscii =
+        BuildNonPrintableAsciiSearchValues();
 
-    private static SearchValues<byte> CreateNonPrintableAscii()
+    private static SearchValues<byte> BuildNonPrintableAsciiSearchValues()
     {
         Span<byte> characters = stackalloc byte[Space + 1];
         for (var c = 0; c < Space; c++)
@@ -462,61 +624,61 @@ internal static partial class YamlSyntax
     /// <returns></returns>
     public static bool ContainsNonPrintableCharacters(ReadOnlySpan<byte> value)
     {
-        // Printable ASCII needs only one scan; most YAML keys and scalar values take this path.
-        return value.IndexOfAnyExceptInRange(Space, (byte)(Delete - 1)) >= 0
-               && (
-                   value.ContainsAny(NonPrintableAscii) || ContainsNonPrintableUnicodeCharacters(value)
-               );
-
-        static bool ContainsNonPrintableUnicodeCharacters(ReadOnlySpan<byte> value)
+        while (!value.IsEmpty)
         {
-            var remaining = value;
-            int nonAsciiOffset;
-            while ((nonAsciiOffset = remaining.IndexOfAnyExceptInRange(NoCharacter, Delete)) >= 0)
+            // Scan printable ASCII in one step, including when it follows a multibyte character.
+            // This avoids a separate full scan for ASCII controls before checking Unicode.
+            var candidateOffset = value.IndexOfAnyExceptInRange(Space, (byte)(Delete - 1));
+            if (candidateOffset < 0)
             {
-                remaining = remaining[nonAsciiOffset..];
-
-                Rune.DecodeFromUtf8(remaining, out var character, out var consumed);
-
-                // ASCII controls were checked by the caller; preserve the same C1 and non-printable code points.
-                if (IsNonPrintableCodePoint(character.Value))
-                {
-                    return true;
-                }
-
-                remaining = remaining[consumed..];
+                return false;
             }
 
-            return false;
+            value = value[candidateOffset..];
+
+            if (value[0] < FirstNonAsciiByte)
+            {
+                return NonPrintableAscii.Contains(value[0]);
+            }
+
+            Rune.DecodeFromUtf8(value, out var character, out var consumed);
+
+            if (IsNonPrintableCodePoint(character.Value))
+            {
+                return true;
+            }
+
+            value = value[consumed..];
         }
+
+        return false;
     }
 
     public static bool ContainsUnrepresentableBlockScalarCharacters(ReadOnlySpan<byte> value)
     {
-        if (Ascii.IsValid(value))
+        while (!value.IsEmpty)
         {
-            // Multiline ASCII commonly contains LF, so skip allowed bytes without decoding each one as a Rune.
-            while (!value.IsEmpty)
+            // Skip printable ASCII in one search without first scanning the whole value for non-ASCII.
+            var candidateOffset = value.IndexOfAnyExceptInRange(Space, (byte)(Delete - 1));
+            if (candidateOffset < 0)
             {
-                var invalidRange = value.IndexOfAnyExceptInRange(Space, (byte)(Delete - 1));
-                if (invalidRange < 0)
-                {
-                    break;
-                }
+                return false;
+            }
 
-                if (value[invalidRange] is not (LineFeed or Tab))
+            value = value[candidateOffset..];
+
+            if (value[0] < FirstNonAsciiByte)
+            {
+                if (value[0] is not (LineFeed or Tab))
                 {
                     return true;
                 }
 
-                value = value[(invalidRange + 1)..];
+                value = value[1..];
+
+                continue;
             }
 
-            return false;
-        }
-
-        while (!value.IsEmpty)
-        {
             Rune.DecodeFromUtf8(value, out var character, out var consumed);
 
             // Preserve the control ranges, allowing only LF and TAB within those ranges.

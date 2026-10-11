@@ -429,7 +429,9 @@ public sealed class YamlWriter : DataWriter, IDisposable
     /// <inheritdoc />
     public override void WriteString(ReadOnlySpan<char> value)
     {
-        int len = value.Length * 4; // multiply by 4 is enough. Encoding.UTF8.GetMaxByteCount(value.Length);
+        int maxLength = checked(value.Length * 4); // multiply by 4 is enough. Encoding.UTF8.GetMaxByteCount(value.Length);
+
+        int len = value.Length < 1024 ? maxLength : Encoding.UTF8.GetByteCount(value);
         var span = len <= YamlDocument.StackLimit ? stackalloc byte[len] : default;
 
         using var _ = ImmediateBuffer<byte>.Using(len, ref span);
