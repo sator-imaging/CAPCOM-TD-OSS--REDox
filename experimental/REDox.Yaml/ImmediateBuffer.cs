@@ -29,7 +29,7 @@ internal readonly ref struct ImmediateBuffer<T> : IDisposable
     {
         if (buffer is T[] rental) // array is not nullable but may be null. see below
         {
-            ArrayPool<T>.Shared.Return(rental);
+            ArrayPool<T>.Shared.Return(rental, clearArray: !typeof(T).IsValueType);
         }
     }
 

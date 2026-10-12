@@ -50,7 +50,7 @@ public sealed partial class TimestampTest
     public void ProcessLocalZone_IsMidPacificUtcMinus12()
     {
         Assert.SkipUnless(
-            OperatingSystem.IsWindows() == false,
+            !OperatingSystem.IsWindows(),
             "Windows ignores the TZ variable, so the local zone of the process cannot be set."
         );
 
