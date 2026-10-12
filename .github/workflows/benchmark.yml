@@ -1,0 +1,79 @@
+﻿name: Benchmark
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run benchmark
+        run: |
+          ### safe guard for local run with `` bash <<'BASH' ``
+          ### run with `export GITHUB_STEP_SUMMARY=/dev/stdout`
+          set -euo pipefail
+          printf "" >> "$GITHUB_STEP_SUMMARY"
+
+          ARTIFACT=$(mktemp -d)
+
+          {
+            echo "dotnet version: $(dotnet --version)"
+            echo
+          } >> $GITHUB_STEP_SUMMARY
+
+          run_benchmark() {
+            local format="$1"
+            local project="$2"
+            local serialize_method="$3"
+            local deserialize_method="$4"
+
+            if ! dotnet run --project "./benchmarks/$project" -c Release -- \
+                   --filter "*$serialize_method*" "*$deserialize_method*" \
+                   --job Short \
+                   --join \
+                   --exporters GitHub \
+                   --artifacts "$ARTIFACT/$format" \
+                   ; \
+            then
+              printf 'Benchmark failed: %s\n' "$format" >&2
+              return 1
+            fi
+          }
+
+          set -- YAML JSON CBOR
+          set -x
+
+          for format in "$@"; do
+            case "$format" in
+              YAML) run_benchmark YAML REDox.Yaml.Benchmarks REDoxYamlSerialize REDoxYamlDeserialize ;;
+              JSON) run_benchmark JSON REDox.Json.Benchmarks REDoxJsonSerialize REDoxJsonDeserialize ;;
+              CBOR) run_benchmark CBOR REDox.Cbor.Benchmarks REDoxCborSerialize REDoxCborDeserialize ;;
+              *) printf 'Unknown benchmark format: %s\n' "$format" >&2; exit 2 ;;
+            esac
+          done
+
+          for format in "$@"; do
+            {
+              echo '##' "$format"
+              echo
+              echo '<details>'
+              echo
+              cat "$ARTIFACT/$format"/results/*joined*report-github.md
+              echo
+              echo '</details>'
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
