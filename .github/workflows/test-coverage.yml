@@ -1,0 +1,209 @@
+name: 'Test and Coverage Report'
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore: [ '.github/**', 'assets/**', 'Unity/**' ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  TEST_OUTPUT: TestResults
+  REPORT_OUTPUT: CoverageReport
+
+jobs:
+  coverage:
+    timeout-minutes: 30
+
+    # Post summary as PR comment
+    permissions:
+      issues: write
+      pull-requests: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          #- REDox
+          #- REDox.Cbor
+          #- REDox.Csv
+          #- REDox.Dynamic
+          #- REDox.Html
+          #- REDox.Ini
+          #- REDox.MessagePack
+          #- REDox.Serialization.DataContractJson
+          #- REDox.Serialization.NewtonsoftJson
+          #- REDox.Serialization.SystemTextJson
+          #- REDox.Toml
+          #- REDox.Xml
+          - REDox.Yaml
+
+    name: coverage (${{ matrix.project }})
+    env:
+      TEST_PROJECT: ./tests/${{ matrix.project }}.Tests
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ACTION_BRANCH (PR or event target branch)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # Required for worktree
+          path: ACTION_BRANCH
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+
+      # Run all on non-PR events. On PR, skip if no related file is changed.
+      - name: Check changed files
+        id: changes
+        working-directory: ACTION_BRANCH
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch origin "${{ github.event.pull_request.base.ref }}"
+
+          PATTERN='^(src|experimental|tests)/(REDox(\.Tests)?/|Directory\.Build\.props$|${{ matrix.project }}(\.Tests)?/)'
+
+          if git diff --name-only \
+            "origin/${{ github.event.pull_request.base.ref }}...${{ github.event.pull_request.head.sha }}" \
+            | grep -qE "$PATTERN"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create merge-base worktree
+        if: github.event_name == 'pull_request' && steps.changes.outputs.run == 'true'
+        working-directory: ACTION_BRANCH
+        run: |
+          set -euo pipefail
+
+          BASE_REF=${{ github.event.pull_request.base.ref }}
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+
+          git fetch origin "$BASE_REF"
+
+          MERGE_BASE=$(git merge-base \
+            "origin/$BASE_REF" \
+            "$HEAD_SHA")
+
+          echo "MERGE_BASE=$MERGE_BASE"
+
+          git worktree add ../BASE_BRANCH $MERGE_BASE
+
+      - uses: actions/setup-dotnet@v5
+        if: steps.changes.outputs.run == 'true'
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test with coverage
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          set -e
+
+          # Create BASE_BRANCH report first
+          for dir in BASE_BRANCH ACTION_BRANCH; do
+            if [ -d "$dir" ]; then
+              dotnet restore "$dir/$TEST_PROJECT"
+              dotnet add "$dir/$TEST_PROJECT" package coverlet.collector
+
+              dotnet test "$dir/$TEST_PROJECT" \
+                --collect:"XPlat Code Coverage" \
+                --logger "trx" \
+                --results-directory "$dir/$TEST_OUTPUT" \
+                || [ "$dir" == "BASE_BRANCH" ]  # Ignore error on main branch
+            fi
+          done
+
+      - name: Generate coverage report
+        if: steps.changes.outputs.run == 'true'
+        run: |
+          dotnet tool install -g dotnet-reportgenerator-globaltool
+
+          generate_report () {
+            local target_dir="$1"
+            local out_dir="$2"
+            local title="$3"
+            local history_dir="$4"
+
+            local -a report_opts=()
+
+            if [ -n "$history_dir" ]; then
+              report_opts+=("-historydir:$history_dir")
+            fi
+
+            reportgenerator \
+              -reporttypes:"Html;MarkdownSummary;MarkdownSummaryGithub" \
+              -reports:"$target_dir/$TEST_OUTPUT/**/coverage.cobertura.xml" \
+              "${report_opts[@]}" \
+              -targetdir:"$out_dir"
+
+            EFFECTIVE_LINE_COUNT=$(find "$target_dir" -name '*.cs' \
+              | xargs -r grep -vE '^[[:space:]]*(//|/\*|\{[[:space:]]*$|\}[[:space:]]*$|$)' \
+              | wc -l)
+            TOTAL_LINE_COUNT=$(find "$target_dir" -name '*.cs' \
+              | xargs -r grep -vE '^[[:space:]]*$' \
+              | wc -l)
+            TEST_COUNT=$(find "$target_dir" -name "*.trx" -exec grep -hoE 'total="[0-9]+"' {} + \
+              | sed -E 's/total="([0-9]+)"/\1/' \
+              | awk '{s+=$1} END {print s}'
+            )
+
+            EFFECTIVE_LINE_COUNT=$(LC_ALL=en_US.UTF-8 numfmt --grouping "$EFFECTIVE_LINE_COUNT")
+            TOTAL_LINE_COUNT=$(LC_ALL=en_US.UTF-8 numfmt --grouping "$TOTAL_LINE_COUNT")
+            TEST_COUNT=$(LC_ALL=en_US.UTF-8 numfmt --grouping "$TEST_COUNT")
+
+            {
+              sed \
+                -e 's/<details open>/<details>/g' \
+                -e 's|- \([0-9.]+%\)</summary>|- <b>\1</b></summary>|g' \
+                -e "s/^# Summary$/# 📊 $title/" \
+                "$out_dir/SummaryGithub.md"
+
+              echo
+              echo "🧪 Total test count: __${TEST_COUNT}__  "
+              echo "🗃️ Total lines of code: __${TOTAL_LINE_COUNT}__ / __${EFFECTIVE_LINE_COUNT}__ (excl. comments and brace-only lines)  "
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          COV_BRANCH=BASE_BRANCH
+          COV_TITLE="Base Commit Coverage (${{ matrix.project }})"
+
+          if [ -d "BASE_BRANCH/$TEST_OUTPUT" ]; then
+            generate_report ACTION_BRANCH "$REPORT_OUTPUT/diff" "PR Coverage (${{ matrix.project }})" \
+              "BASE_BRANCH/$TEST_OUTPUT"
+          else
+            COV_BRANCH=ACTION_BRANCH
+            COV_TITLE="Total Coverage (${{ matrix.project }})"
+            {
+              echo "⚠️ Base commit coverage was skipped or failed."
+              echo
+            } >> $GITHUB_STEP_SUMMARY
+          fi
+
+          generate_report "$COV_BRANCH" "$REPORT_OUTPUT/full" "$COV_TITLE" ""
+
+          {
+            echo "<!-- ${{ github.workflow }} ${{ matrix.project }} -->"
+            cat "$GITHUB_STEP_SUMMARY"
+          } > PR_COMMENT.md
+
+      - uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad  # v4.0.0
+        if: ${{ github.event.pull_request.number && steps.changes.outputs.run == 'true' }}
+        id: find-comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: "<!-- ${{ github.workflow }} ${{ matrix.project }} -->"
+
+      - uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9  # v5.0.0
+        if: ${{ github.event.pull_request.number && steps.changes.outputs.run == 'true' }}
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          edit-mode: replace
+          body-path: PR_COMMENT.md
