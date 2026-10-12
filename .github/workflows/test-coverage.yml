@@ -50,6 +50,7 @@ jobs:
           fetch-depth: 0  # Required for worktree
           path: ACTION_BRANCH
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          submodules: recursive
 
       # Run all on non-PR events. On PR, skip if no related file is changed.
       - name: Check changed files
