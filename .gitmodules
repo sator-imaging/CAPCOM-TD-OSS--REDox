@@ -10,3 +10,6 @@
 [submodule "external/toml-test"]
 	path = external/toml-test
 	url = https://github.com/toml-lang/toml-test
+[submodule "external/yaml-test-suite"]
+	path = external/yaml-test-suite
+	url = https://github.com/yaml/yaml-test-suite.git
